@@ -1,13 +1,54 @@
 /**
- * Onvord Landing Page - Interactions & Animations
+ * Onvord Premium Landing Page - Interactions & i18n
  */
 
 document.addEventListener('DOMContentLoaded', () => {
-    // 1. Intersection Observer for scroll animations (Slide up reveals)
+    // --- 1. Internationalization (i18n) ---
+    const langToggleBtn = document.getElementById('lang-toggle');
+
+    // Default language: Check localStorage, then browser language, fallback to 'en'
+    let currentLang = localStorage.getItem('onvord_lang');
+    if (!currentLang) {
+        const browserLang = navigator.language || navigator.userLanguage;
+        currentLang = browserLang.startsWith('zh') ? 'zh' : 'en';
+    }
+
+    function applyLanguage(lang) {
+        const dict = translations[lang];
+        if (!dict) return;
+
+        // Update all elements with data-i18n attribute
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+            const key = el.getAttribute('data-i18n');
+            if (dict[key]) {
+                // Use innerHTML to support <br> tags in strings like hero_title
+                el.innerHTML = dict[key];
+            }
+        });
+
+        // Update HTML lang attribute
+        document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+
+        // Save preference
+        localStorage.setItem('onvord_lang', lang);
+    }
+
+    // Initial apply
+    applyLanguage(currentLang);
+
+    // Toggle handler
+    if (langToggleBtn) {
+        langToggleBtn.addEventListener('click', () => {
+            currentLang = currentLang === 'en' ? 'zh' : 'en';
+            applyLanguage(currentLang);
+        });
+    }
+
+    // --- 2. Scroll Reveal Animations (Minimalist easing) ---
     const revealElements = document.querySelectorAll('.slide-up-reveal');
 
     const revealOptions = {
-        threshold: 0.15, // Trigger when 15% of the element is visible
+        threshold: 0.1, // Trigger when 10% visible
         rootMargin: "0px 0px -50px 0px"
     };
 
@@ -15,8 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
                 entry.target.classList.add('visible');
-                // Optional: Stop observing once revealed
-                // observer.unobserve(entry.target);
+                observer.unobserve(entry.target); // Only animate once
             }
         });
     }, revealOptions);
@@ -25,21 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
         revealObserver.observe(el);
     });
 
-    // 2. Mouse tracking for Bento Box hover effect (glow following cursor)
-    const cards = document.querySelectorAll('.bento-card');
-
-    cards.forEach(card => {
-        card.addEventListener('mousemove', e => {
-            const rect = card.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-
-            card.style.setProperty('--mouse-x', `${x}px`);
-            card.style.setProperty('--mouse-y', `${y}px`);
-        });
-    });
-
-    // 3. Smooth scrolling for anchor links
+    // --- 3. Smooth Scrolling for Anchor Links ---
     document.querySelectorAll('a[href^="#"]').forEach(anchor => {
         anchor.addEventListener('click', function (e) {
             e.preventDefault();

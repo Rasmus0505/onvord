@@ -1,27 +1,25 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Onvord - 录制你的操作，生成 AI 可执行的 SOP</title>
-    <meta name="description" content="通过「边操作边说话」自动录制浏览器流程，生成人类与 AI Agent 都能读懂的结构化 SOP（标准操作文档）。">
+    <title>Onvord - Record Actions. Generate SOPs.</title>
+    <meta name="description" content="Browser action recording + voice narration → Structured SOPs for AI agents.">
     <link rel="icon" href="assets/logo.png" type="image/png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <!-- 动态背景发光 -->
-    <div class="bg-glow glow-1"></div>
-    <div class="bg-glow glow-2"></div>
-    <div class="bg-noise"></div>
+    <!-- Ultra subtle radial gradient for depth, pure black base -->
+    <div class="bg-depth"></div>
 
-    <!-- 导航栏 -->
+    <!-- Minimalist Header -->
     <header class="nav-header fade-in">
         <div class="nav-container">
             <div class="logo">
@@ -29,16 +27,18 @@
                 <span>Onvord</span>
             </div>
             <div class="nav-links">
-                <a href="#features">功能</a>
-                <a href="#use-cases">场景</a>
+                <a href="#features" data-i18n="nav_features">Features</a>
+                <a href="#use-cases" data-i18n="nav_use_cases">Use Cases</a>
+                <div class="nav-divider"></div>
+                <button id="lang-toggle" class="lang-btn" data-i18n="lang_toggle">中文</button>
                 <a href="https://github.com/xllinbupt/onvord" target="_blank" class="nav-btn-github">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"
                         stroke-linecap="round" stroke-linejoin="round">
                         <path
                             d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22">
                         </path>
                     </svg>
-                    GitHub
+                    <span data-i18n="nav_github">GitHub</span>
                 </a>
             </div>
         </div>
@@ -47,171 +47,189 @@
     <main>
         <!-- Hero Section -->
         <section class="hero slide-up">
-            <div class="badge">🚀 帮助 AI 看见你的操作</div>
-            <h1 class="hero-title">录制你的操作<br>生成 <span class="text-gradient">AI 可执行的 SOP</span></h1>
-            <p class="hero-desc">Browser action recording + voice narration → Structured SOPs for AI
-                agents.<br>只需边操作边说话，自动生成图文并茂的结构化文档。你做一遍，AI 帮你做一万遍。</p>
+            <div class="badge" data-i18n="hero_badge">Help AI see your actions</div>
+            <h1 class="hero-title" data-i18n="hero_title">Record Actions.<br>Generate SOPs.</h1>
+            <p class="hero-desc" data-i18n="hero_desc">Browser action recording + voice narration → Structured SOPs for
+                AI agents. Do it once, let AI do it a thousand times.</p>
 
             <div class="cta-group">
-                <a href="https://github.com/xllinbupt/onvord/archive/refs/heads/main.zip" class="btn btn-primary">
-                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="7 10 12 15 17 10"></polyline>
-                        <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
-                    下载安装 (Preview)
+                <a href="https://github.com/xllinbupt/onvord/archive/refs/heads/main.zip" class="btn btn-primary"
+                    data-i18n="hero_btn_primary">
+                    Download Extension
                 </a>
-                <a href="#how-it-works" class="btn btn-secondary">
-                    了解原理
+                <a href="#how-it-works" class="btn btn-secondary" data-i18n="hero_btn_secondary">
+                    How it works
                 </a>
             </div>
 
-            <!-- 假装的界面展示层 (Mockup) -->
-            <div class="hero-mockup fade-in-delay">
-                <div class="mockup-header">
-                    <div class="mockup-dots"><span></span><span></span><span></span></div>
-                    <div class="mockup-url">github.com/xllinbupt/onvord</div>
+            <!-- Minimalist Abstract Representation -->
+            <div class="hero-abstract fade-in-delay">
+                <div class="abstract-line">
+                    <div class="ab-dot"></div>
+                    <div class="ab-text">Action: Click "Deploy"</div>
+                    <div class="ab-code">#btn-deploy</div>
                 </div>
-                <div class="mockup-body">
-                    <div class="mockup-sop">
-                        <div class="sop-title">📖 SOP: 提交代码 PR 演示</div>
-
-                        <div class="sop-step">
-                            <div class="step-num">1</div>
-                            <div class="step-content">
-                                <div class="step-action">点击「Pull requests」标签</div>
-                                <div class="step-narration">💬 "首先我们点击代码仓库上面的 Pull requests 进入 PR 列表页面。"</div>
-                                <div class="step-selector">🔧 selector: <span class="code">#pull-requests-tab</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="sop-step">
-                            <div class="step-num">2</div>
-                            <div class="step-content">
-                                <div class="step-action">点击按钮 <span class="action-hl">「New pull request」</span></div>
-                                <div class="step-narration">💬 "然后点击右边这个绿色的 New pull request 按钮发起新的合并请求。"</div>
-                            </div>
-                        </div>
-
+                <div class="abstract-line">
+                    <div class="ab-dot" style="opacity: 0.5;"></div>
+                    <div class="ab-text" style="color: #a1a1aa">Voice: "Now we click the deploy button to push changes."
+                    </div>
+                </div>
+                <div class="abstract-arrow">↓</div>
+                <div class="abstract-output">
+                    <div class="out-header">Generated_SOP.html</div>
+                    <div class="out-body">
+                        <div class="out-block w-full"></div>
+                        <div class="out-block w-3/4"></div>
+                        <div class="out-block w-1/2"></div>
+                        <div class="out-image"></div>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- 特性 Bento Box -->
+        <!-- Features Grid (Monochrome Bento) -->
         <section id="features" class="section">
-            <div class="section-badge">FEATURES</div>
-            <h2 class="section-title">为 AI Native 时代打造</h2>
-            <p class="section-desc">从底层改变 SOP 的制作和呈现方式，让人和 AI 都能看懂。</p>
+            <div class="section-badge" data-i18n="ft_badge">FEATURES</div>
+            <h2 class="section-title" data-i18n="ft_title">Built for the AI Native Era</h2>
+            <p class="section-desc" data-i18n="ft_desc">Transforming how SOPs are created and presented, making them
+                readable for both humans and AI.</p>
 
             <div class="bento-grid">
-
                 <div class="bento-card col-span-2 slide-up-reveal">
-                    <div class="card-icon">🎙️</div>
-                    <h3>实时语音流式转录</h3>
-                    <p>基于 Deepgram Nova-2 引擎，支持中文、英文及多语种自动检测。边操作边讲解，语音自动关联到对应的点击动作，无需事后剪辑。</p>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                            <line x1="12" y1="19" x2="12" y2="23"></line>
+                            <line x1="8" y1="23" x2="16" y2="23"></line>
+                        </svg>
+                    </div>
+                    <h3 data-i18n="ft_1_title">Real-time Streaming STT</h3>
+                    <p data-i18n="ft_1_desc">Powered by Deepgram Nova-2. Supports multi-language auto-detection. Narrate
+                        while you operate; your voice is automatically linked to the corresponding actions without
+                        post-editing.</p>
                 </div>
 
                 <div class="bento-card slide-up-reveal" style="transition-delay: 0.1s;">
-                    <div class="card-icon">🖱️</div>
-                    <h3>智能操作捕获</h3>
-                    <p>自动记录点击、输入、滚动。精准区分「文字选择」与「点击」，智能过滤点击页面空白处的无意义冗余操作。</p>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                    </div>
+                    <h3 data-i18n="ft_2_title">Smart Action Capture</h3>
+                    <p data-i18n="ft_2_desc">Automatically records clicks, inputs, and scrolls. Precisely distinguishes
+                        between 'text selection' and 'clicks', intelligently filtering out meaningless redundant
+                        actions.</p>
                 </div>
 
                 <div class="bento-card slide-up-reveal" style="transition-delay: 0.2s;">
-                    <div class="card-icon">📸</div>
-                    <h3>醒目操作点标注截图</h3>
-                    <p>每次操作自动截取当前屏幕，并用三层复合光圈醒目标注点击/选择位置。无论是浅色还是深色背景页面，焦点皆清晰可见。</p>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                    </div>
+                    <h3 data-i18n="ft_3_title">Annotated Screenshots</h3>
+                    <p data-i18n="ft_3_desc">Auto-captures the screen on every action, marking the exact click position
+                        with a high-contrast ring, ensuring clarity on both light and dark backgrounds.</p>
                 </div>
 
                 <div class="bento-card col-span-2 slide-up-reveal" style="transition-delay: 0.3s;">
-                    <div class="card-icon">📄</div>
-                    <h3>单页面图文结构化导出</h3>
-                    <p>一键导出为包含 HTML、内联 CSS 和 base64 图片的独立文件。排版精美的深色主题时间线，并在页头附带「文档说明」—— 发给大模型（如 Claude/GPT-4V），AI
-                        瞬间读懂操作意图与确切的 CSS Node 路径。</p>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                            <polyline points="10 9 9 9 8 9"></polyline>
+                        </svg>
+                    </div>
+                    <h3 data-i18n="ft_4_title">Standalone Structured Export</h3>
+                    <p data-i18n="ft_4_desc">One-click export to a self-contained HTML file. Send it to LLMs (like
+                        Claude or GPT-4V), and the AI instantly understands your intent and the exact CSS Node path.</p>
                 </div>
-
             </div>
         </section>
 
-        <!-- 使用场景 -->
+        <!-- Use Cases -->
         <section id="use-cases" class="section">
-            <div class="section-badge">SCENARIOS</div>
-            <h2 class="section-title">你可以用它做什么？</h2>
+            <div class="section-badge" data-i18n="uc_badge">SCENARIOS</div>
+            <h2 class="section-title" data-i18n="uc_title">What can you build with it?</h2>
 
             <div class="use-cases-grid">
                 <div class="uc-card slide-up-reveal">
                     <div class="uc-num">01</div>
                     <div class="uc-content">
-                        <h4>教 AI 做任务</h4>
-                        <p>录制一遍业务系统操作流，导出包含选择器的结构化 SOP，喂给 Browser Agent 即可实现自动化执行。</p>
+                        <h4 data-i18n="uc_1_title">Teach AI tasks</h4>
+                        <p data-i18n="uc_1_desc">Record a workflow once, export the structured SOP with selectors, and
+                            feed it to a Browser Agent for automated execution.</p>
                     </div>
                 </div>
 
                 <div class="uc-card slide-up-reveal" style="transition-delay: 0.1s;">
                     <div class="uc-num">02</div>
                     <div class="uc-content">
-                        <h4>产品操作手册</h4>
-                        <p>作为 PM 或开发，一边演示一边口述，直接生成图文并茂的用户教程文档，彻底告别繁琐的截图拼图工作。</p>
+                        <h4 data-i18n="uc_2_title">Product Manuals</h4>
+                        <p data-i18n="uc_2_desc">Demonstrate and dictate simultaneously to directly generate visually
+                            rich user tutorial documents, eliminating tedious screenshot stitching.</p>
                     </div>
                 </div>
 
                 <div class="uc-card slide-up-reveal" style="transition-delay: 0.2s;">
                     <div class="uc-num">03</div>
                     <div class="uc-content">
-                        <h4>Bug 提交流程</h4>
-                        <p>测试同学还原 Bug 现场的终极武器。每一个点击路径、对应的页面状态和操作者的补充说明完美绑定，方便研发排查。</p>
+                        <h4 data-i18n="uc_3_title">Bug Reproduction</h4>
+                        <p data-i18n="uc_3_desc">The ultimate weapon for QA. Every click path, page state, and
+                            operator's supplementary explanation are perfectly bound.</p>
                     </div>
                 </div>
 
                 <div class="uc-card slide-up-reveal" style="transition-delay: 0.3s;">
                     <div class="uc-num">04</div>
                     <div class="uc-content">
-                        <h4>团队内部培训</h4>
-                        <p>老员工离职交接、新人培训，只需把常规后台操作录一遍，新人即可依据步骤进行自我 onboarding。</p>
+                        <h4 data-i18n="uc_4_title">Internal Training</h4>
+                        <p data-i18n="uc_4_desc">For employee handover; just record routine backend operations once, and
+                            newcomers can self-onboard following the steps.</p>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- 如何使用 -->
-        <section id="how-it-works" class="section how-it-works">
-            <div class="section-badge">QUICK START</div>
-            <h2 class="section-title">三步开启自动化</h2>
+        <!-- How It Works (Steps) -->
+        <section id="how-it-works" class="section">
+            <div class="section-badge" data-i18n="hw_badge">QUICK START</div>
+            <h2 class="section-title" data-i18n="hw_title">Three Steps to Automation</h2>
 
             <div class="steps-container">
                 <div class="step slide-up-reveal">
-                    <div class="step-indicator">
-                        <div class="line"></div>
-                        <div class="dot"></div>
-                    </div>
+                    <div class="step-num-large">1</div>
+                    <div class="step-line"></div>
                     <div class="step-info">
-                        <h3>1. 安装插件</h3>
-                        <p>下载源码并在 Chrome 中「加载已解压的扩展程序」。打开侧边栏。</p>
+                        <h3 data-i18n="hw_1_title">1. Install</h3>
+                        <p data-i18n="hw_1_desc">Download source code and 'Load unpacked' in Chrome. Open the sidebar.
+                        </p>
                     </div>
                 </div>
 
                 <div class="step slide-up-reveal" style="transition-delay: 0.1s;">
-                    <div class="step-indicator">
-                        <div class="line"></div>
-                        <div class="dot"></div>
-                    </div>
+                    <div class="step-num-large">2</div>
+                    <div class="step-line"></div>
                     <div class="step-info">
-                        <h3>2. 填入 API Key</h3>
-                        <p>前往 Deepgram 免费注册获取 API Key（首送 $200 额度），在扩展设置页粘贴保存。</p>
+                        <h3 data-i18n="hw_2_title">2. API Key</h3>
+                        <p data-i18n="hw_2_desc">Sign up for Deepgram to get a free API Key, and save it in settings.
+                        </p>
                     </div>
                 </div>
 
                 <div class="step slide-up-reveal" style="transition-delay: 0.2s;">
-                    <div class="step-indicator">
-                        <div class="line"></div>
-                        <div class="dot"></div>
-                    </div>
+                    <div class="step-num-large">3</div>
+                    <div class="step-line"></div>
                     <div class="step-info">
-                        <h3>3. 边说边点 > 导出</h3>
-                        <p>点击「开始录制」，在任意网页操作并讲话讲解。结束后点击导出，获得结构化的独立 HTML 文件。</p>
+                        <h3 data-i18n="hw_3_title">3. Record</h3>
+                        <p data-i18n="hw_3_desc">Click 'Start Recording', operate and narrate. Export HTML when done.
+                        </p>
                     </div>
                 </div>
             </div>
@@ -221,20 +239,22 @@
     <footer>
         <div class="footer-content">
             <div class="f-brand">
-                <img src="assets/logo.png" alt="Logo">
+                <img src="assets/logo.png" alt="Logo" style="filter: grayscale(100%);">
                 <span>Onvord</span>
             </div>
-            <p class="f-desc">Built with ❤️ for the AI-native workflow.<br>完全本地存储，代码开源透明，保障隐私安全。</p>
+            <p class="f-desc" data-i18n="footer_desc" style="max-width: 400px; margin: 0 auto;"></p>
             <div class="f-links">
-                <a href="https://github.com/xllinbupt/onvord" target="_blank">GitHub Repository</a>
-                <a href="https://github.com/xllinbupt/onvord/issues" target="_blank">Feedback / Issues</a>
+                <a href="https://github.com/xllinbupt/onvord" target="_blank" data-i18n="footer_repo">GitHub Repo</a>
+                <a href="https://github.com/xllinbupt/onvord/issues" target="_blank"
+                    data-i18n="footer_issues">Issues</a>
             </div>
-            <div class="copyright">
-                © 2026 Onvord Project. MIT Licensed.
+            <div class="copyright" data-i18n="footer_copy">
+                © 2026 Onvord. MIT Licensed.
             </div>
         </div>
     </footer>
 
+    <script src="i18n.js"></script>
     <script src="main.js"></script>
 </body>
 
