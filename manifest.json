@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Onvord",
+  "version": "0.1.0",
+  "description": "录制浏览器操作与语音讲解，生成 AI 可执行的 SOP",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "sidePanel",
+    "tabs",
+    "offscreen",
+    "storage"
+  ],
+  "options_page": "options.html",
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "打开 Onvord"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

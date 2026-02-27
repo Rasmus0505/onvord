@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onvord - 麦克风授权</title>
+    <style>
+        :root {
+            --bg0: #0c0c14;
+            --bg1: #14141f;
+            --bg2: #1c1c2b;
+            --tx: #e8e8f0;
+            --tx2: #9898b0;
+            --tx3: #686880;
+            --ac: #6366f1;
+            --ac-g: rgba(99, 102, 241, .3);
+            --ach: #818cf8;
+            --ok: #10b981;
+            --dn: #ef4444;
+            --bd: rgba(255, 255, 255, .06);
+            --r: 10px;
+            --rf: 999px;
+            --f: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        body {
+            font-family: var(--f);
+            background: var(--bg0);
+            color: var(--tx);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-font-smoothing: antialiased
+        }
+
+        .card {
+            text-align: center;
+            max-width: 420px;
+            padding: 48px 36px;
+            background: var(--bg1);
+            border-radius: 20px;
+            border: 1px solid var(--bd);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, .5);
+            animation: fadeIn .4s ease
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(16px)
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0)
+            }
+        }
+
+        .mic-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            box-shadow: 0 8px 30px var(--ac-g);
+            animation: breathe 2s ease-in-out infinite
+        }
+
+        @keyframes breathe {
+
+            0%,
+            100% {
+                box-shadow: 0 8px 30px var(--ac-g)
+            }
+
+            50% {
+                box-shadow: 0 8px 45px var(--ac-g), 0 0 0 8px rgba(99, 102, 241, .1)
+            }
+        }
+
+        h1 {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #818cf8, #6366f1, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text
+        }
+
+        .desc {
+            color: var(--tx2);
+            font-size: 14px;
+            line-height: 1.7;
+            margin-bottom: 28px
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px 32px;
+            border: none;
+            border-radius: 14px;
+            font-family: var(--f);
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all .2s;
+            width: 100%
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff;
+            box-shadow: 0 4px 15px var(--ac-g)
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #818cf8, #a78bfa);
+            box-shadow: 0 6px 25px var(--ac-g);
+            transform: translateY(-1px)
+        }
+
+        .btn-primary:disabled {
+            opacity: .5;
+            cursor: not-allowed;
+            transform: none
+        }
+
+        .status {
+            margin-top: 20px;
+            font-size: 13px;
+            color: var(--tx3);
+            min-height: 20px
+        }
+
+        .status.ok {
+            color: var(--ok)
+        }
+
+        .status.err {
+            color: var(--dn)
+        }
+
+        .hint {
+            margin-top: 16px;
+            font-size: 12px;
+            color: var(--tx3);
+            line-height: 1.6
+        }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <div class="mic-icon">🎙️</div>
+        <h1>授权麦克风访问</h1>
+        <p class="desc">Onvord 需要麦克风权限来录制你的语音讲解。<br>点击下方按钮后，请在弹出的对话框中选择<strong>「允许」</strong>。</p>
+        <button id="btn-grant" class="btn btn-primary">🎤 授予麦克风权限</button>
+        <div id="status" class="status"></div>
+        <div class="hint">授权后此页面会自动关闭，你可以回到侧边栏继续录制。</div>
+    </div>
+    <script src="mic-permission.js"></script>
+</body>
+
+</html>
