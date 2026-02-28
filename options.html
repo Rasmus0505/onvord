@@ -3,194 +3,237 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Onvord 设置</title>
     <style>
         :root {
-            --bg0: #0c0c14;
-            --bg1: #14141f;
-            --bg2: #1c1c2b;
-            --bg2h: #24243a;
-            --tx: #e8e8f0;
-            --tx2: #9898b0;
-            --tx3: #686880;
-            --ac: #6366f1;
-            --ac-g: rgba(99, 102, 241, .3);
-            --ok: #10b981;
-            --dn: #ef4444;
-            --bd: rgba(255, 255, 255, .06);
-            --bd2: rgba(255, 255, 255, .1);
-            --r: 10px;
-            --f: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif
+            --bg: #eef3f8;
+            --surface: #ffffff;
+            --surface-2: #f7fafc;
+            --line: #d8e2ec;
+            --line-strong: #c5d5e5;
+
+            --text: #102a43;
+            --muted: #52667a;
+            --muted-soft: #7b8ea4;
+
+            --ac: #0b5fff;
+            --ach: #2f80ff;
+            --ac-g: rgba(11, 95, 255, 0.2);
+            --ok: #1f9d68;
+            --dn: #e5484d;
+
+            --f-title: "Nunito Sans", "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            --f-body: "Public Sans", "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
 
         * {
             margin: 0;
             padding: 0;
-            box-sizing: border-box
+            box-sizing: border-box;
         }
 
         body {
-            font-family: var(--f);
-            background: var(--bg0);
-            color: var(--tx);
+            font-family: var(--f-body);
+            background:
+                radial-gradient(circle at 92% 5%, rgba(11, 95, 255, 0.13) 0%, transparent 34%),
+                linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
+            color: var(--text);
             min-height: 100vh;
             display: flex;
             justify-content: center;
-            padding: 40px 20px;
-            -webkit-font-smoothing: antialiased
+            padding: 34px 16px;
+            -webkit-font-smoothing: antialiased;
         }
 
         .container {
-            max-width: 520px;
-            width: 100%
+            max-width: 640px;
+            width: 100%;
+        }
+
+        .head {
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(8px);
+            box-shadow: 0 12px 24px rgba(12, 27, 61, 0.08);
+            padding: 16px 18px;
+            margin-bottom: 14px;
+        }
+
+        .kicker {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            border: 1px solid var(--line-strong);
+            background: #f4f8fd;
+            color: #3c5471;
+            padding: 4px 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: 10px;
+            margin-bottom: 8px;
+            font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace;
         }
 
         h1 {
+            font-family: var(--f-title);
             font-size: 24px;
-            font-weight: 700;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            line-height: 1.15;
             margin-bottom: 6px;
-            background: linear-gradient(135deg, #818cf8, #6366f1, #a78bfa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text
+            color: #113252;
         }
 
         .subtitle {
-            color: var(--tx2);
+            color: var(--muted);
             font-size: 14px;
-            margin-bottom: 32px
+            line-height: 1.65;
         }
 
         .card {
-            background: var(--bg2);
-            border-radius: 14px;
-            border: 1px solid var(--bd);
-            padding: 24px;
-            margin-bottom: 20px
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.94);
+            backdrop-filter: blur(8px);
+            box-shadow: 0 12px 24px rgba(12, 27, 61, 0.08);
+            padding: 16px;
+            margin-bottom: 12px;
         }
 
         .card-title {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 16px;
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #46617e;
+            margin-bottom: 12px;
             display: flex;
             align-items: center;
-            gap: 8px
+            gap: 8px;
         }
 
         .field {
-            margin-bottom: 16px
+            margin-bottom: 12px;
         }
 
         .field:last-child {
-            margin-bottom: 0
+            margin-bottom: 0;
         }
 
         label {
             display: block;
-            font-size: 13px;
-            color: var(--tx2);
+            font-size: 12px;
+            color: var(--muted);
             margin-bottom: 6px;
-            font-weight: 500
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
 
         input[type="text"],
-        input[type="password"] {
+        input[type="password"],
+        select {
             width: 100%;
-            padding: 10px 14px;
-            background: var(--bg1);
-            border: 1px solid var(--bd2);
-            border-radius: 8px;
-            color: var(--tx);
-            font-family: var(--f);
+            padding: 11px 12px;
+            background: var(--surface-2);
+            border: 1px solid #d3e1ef;
+            border-radius: 10px;
+            color: #173453;
+            font-family: var(--f-body);
             font-size: 14px;
             outline: none;
-            transition: all .2s
+            transition: 150ms ease;
         }
 
-        input:focus {
+        input:focus,
+        select:focus {
             border-color: var(--ac);
-            box-shadow: 0 0 0 3px var(--ac-g)
+            box-shadow: 0 0 0 3px var(--ac-g);
+            background: #ffffff;
         }
 
         input::placeholder {
-            color: var(--tx3)
+            color: var(--muted-soft);
         }
 
         .hint {
             font-size: 12px;
-            color: var(--tx3);
+            color: var(--muted-soft);
             margin-top: 6px;
-            line-height: 1.5
+            line-height: 1.65;
         }
 
         .hint a {
             color: var(--ac);
-            text-decoration: none
+            text-decoration: none;
         }
 
         .hint a:hover {
-            text-decoration: underline
+            text-decoration: underline;
         }
 
         .btn-row {
             display: flex;
             gap: 10px;
-            margin-top: 20px
+            margin-top: 16px;
+            flex-wrap: wrap;
         }
 
         .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-family: var(--f);
+            padding: 10px 16px;
+            border: 1px solid transparent;
+            border-radius: 11px;
+            font-family: var(--f-body);
             font-size: 14px;
             font-weight: 600;
             cursor: pointer;
-            transition: all .2s
+            transition: 150ms ease;
         }
 
         .btn-primary {
-            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            background: linear-gradient(120deg, var(--ac), var(--ach));
             color: #fff;
-            box-shadow: 0 4px 15px var(--ac-g)
+            box-shadow: 0 10px 20px var(--ac-g);
         }
 
         .btn-primary:hover {
             transform: translateY(-1px);
-            box-shadow: 0 6px 25px var(--ac-g)
+            box-shadow: 0 12px 24px var(--ac-g);
         }
 
         .btn-sec {
-            background: var(--bg2h);
-            color: var(--tx);
-            border: 1px solid var(--bd2)
+            background: #ffffff;
+            color: #314b66;
+            border-color: #d5e2ef;
         }
 
         .btn-sec:hover {
-            background: var(--bg1)
+            background: #f6f9fd;
+            border-color: #c3d6ea;
         }
 
         .status {
-            padding: 10px 14px;
-            border-radius: 8px;
+            padding: 10px 12px;
+            border-radius: 10px;
             font-size: 13px;
             margin-top: 12px;
-            display: none
+            display: none;
         }
 
         .status.ok {
             display: block;
-            background: rgba(16, 185, 129, .1);
-            border: 1px solid rgba(16, 185, 129, .3);
-            color: var(--ok)
+            background: rgba(31, 157, 104, 0.08);
+            border: 1px solid rgba(31, 157, 104, 0.26);
+            color: var(--ok);
         }
 
         .status.err {
             display: block;
-            background: rgba(239, 68, 68, .1);
-            border: 1px solid rgba(239, 68, 68, .3);
-            color: var(--dn)
+            background: rgba(229, 72, 77, 0.08);
+            border: 1px solid rgba(229, 72, 77, 0.26);
+            color: var(--dn);
         }
 
         .toggle-vis {
@@ -200,34 +243,51 @@
             transform: translateY(-50%);
             background: none;
             border: none;
-            color: var(--tx3);
+            color: var(--muted-soft);
             cursor: pointer;
             font-size: 16px;
-            padding: 4px
+            padding: 4px;
         }
 
         .toggle-vis:hover {
-            color: var(--tx)
+            color: #173453;
         }
 
         .input-wrap {
-            position: relative
+            position: relative;
+        }
+
+        .notes {
+            font-size: 13px;
+            color: var(--muted);
+            line-height: 1.8;
+        }
+
+        .notes p {
+            margin-bottom: 6px;
+        }
+
+        .notes p:last-child {
+            margin-bottom: 0;
         }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <h1>⚙️ Onvord 设置</h1>
-        <p class="subtitle">配置语音识别服务，让录制更智能</p>
+        <div class="head">
+            <p class="kicker">Extension Settings</p>
+            <h1>Onvord 语音配置</h1>
+            <p class="subtitle">与官网视觉保持一致。这里只做页面重构，功能逻辑与存储流程保持原样。</p>
+        </div>
 
         <div class="card">
-            <div class="card-title">🎙️ 语音识别（Deepgram）</div>
+            <div class="card-title">语音识别（Deepgram）</div>
             <div class="field">
                 <label for="dg-key">API Key</label>
                 <div class="input-wrap">
                     <input type="password" id="dg-key" placeholder="输入你的 Deepgram API Key">
-                    <button class="toggle-vis" id="toggle-vis" title="显示/隐藏">👁️</button>
+                    <button class="toggle-vis" id="toggle-vis" type="button" title="显示/隐藏">👁️</button>
                 </div>
                 <div class="hint">
                     免费注册即送 $200 额度 → <a href="https://console.deepgram.com/signup"
@@ -237,8 +297,7 @@
             </div>
             <div class="field">
                 <label for="dg-lang">识别语言</label>
-                <select id="dg-lang"
-                    style="width:100%;padding:10px 14px;background:var(--bg1);border:1px solid var(--bd2);border-radius:8px;color:var(--tx);font-family:var(--f);font-size:14px;outline:none">
+                <select id="dg-lang">
                     <option value="zh">中文（普通话）</option>
                     <option value="en">English</option>
                     <option value="ja">日本語</option>
@@ -247,19 +306,19 @@
                 </select>
             </div>
             <div class="btn-row">
-                <button class="btn btn-primary" id="btn-save">💾 保存设置</button>
-                <button class="btn btn-sec" id="btn-test">🔍 测试连接</button>
+                <button class="btn btn-primary" id="btn-save">保存设置</button>
+                <button class="btn btn-sec" id="btn-test">测试连接</button>
             </div>
             <div class="status" id="status"></div>
         </div>
 
         <div class="card">
-            <div class="card-title">💡 说明</div>
-            <div style="font-size:13px;color:var(--tx2);line-height:1.8">
-                • Onvord 使用 Deepgram 进行实时语音转文字<br>
-                • 你的 API Key 仅存储在本地浏览器中，不会上传到任何服务器<br>
-                • 如果不配置 API Key，语音识别功能将不可用<br>
-                • 未来将支持更多语音引擎（如讯飞等）
+            <div class="card-title">使用说明</div>
+            <div class="notes">
+                <p>• Onvord 使用 Deepgram 进行实时语音转文字。</p>
+                <p>• 你的 API Key 仅存储在本地浏览器中，不会上传到任何服务器。</p>
+                <p>• 如果不配置 API Key，语音识别功能将不可用。</p>
+                <p>• 未来将支持更多语音引擎（如讯飞等）。</p>
             </div>
         </div>
     </div>
