@@ -54,6 +54,14 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 - Send directly to colleagues or upload to AI agents
 - Built-in documentation header — AI understands it immediately
 
+## Recent Updates (2026-03)
+
+- Refreshed extension icon assets: `icons/icon16.png`, `icons/icon48.png`, `icons/icon128.png`, `icons/logo.png`
+- Speech-to-text now defaults to third-party API (Deepgram); Chrome built-in Web Speech is removed
+- Sidebar label was updated from "Technical Details" to "Execution Details (For Agent)"
+- Unrecognized / non-meaningful speech text (for example `...` or punctuation-only) is no longer shown in timeline/preview
+- Scroll actions are filtered by PRD rules and merged in live timeline (for example `Scroll xN`)
+
 ---
 
 ## Use Cases
