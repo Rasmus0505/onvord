@@ -375,20 +375,21 @@ function resumeRecording() {
 /* ── Scroll filtering (promote pending scrolls) ── */
 function promotePendingScrolls(beforeTimestamp) {
     // If a click/input happens within SCROLL_PROMOTE_WINDOW of a pending scroll,
-    // promote that scroll to a real action
-    const promoted = [];
+    // promote only the latest one as the meaningful "find target then act" scroll.
+    let latest = null;
     const remaining = [];
     for (const ps of state.pendingScrolls) {
-        if (Math.abs(beforeTimestamp - ps.timestamp) <= SCROLL_PROMOTE_WINDOW) {
-            promoted.push(ps);
-        } else if (beforeTimestamp - ps.timestamp > SCROLL_PROMOTE_WINDOW) {
+        const delta = beforeTimestamp - ps.timestamp;
+        if (delta >= 0 && delta <= SCROLL_PROMOTE_WINDOW) {
+            if (!latest || ps.timestamp > latest.timestamp) latest = ps;
+        } else if (delta > SCROLL_PROMOTE_WINDOW) {
             // Too old, discard
         } else {
             remaining.push(ps);
         }
     }
     state.pendingScrolls = remaining;
-    return promoted;
+    return latest ? [latest] : [];
 }
 
 /* ── SOP generation (legacy compat for Phase 4 transition) ── */
@@ -410,6 +411,13 @@ function actionDesc(ev) {
     }
 }
 
+function isMeaningfulNarrationText(text) {
+    const normalized = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    if (!normalized) return false;
+    const core = normalized.replace(/[.。,…，、!！?？~～\-—_·•:：;；'"`“”‘’()（）[\]【】{}<>《》|\\/+=*&^%$#@\s]/g, '');
+    return core.length > 0;
+}
+
 function generateSOP() {
     // Flatten all actions from timeline blocks
     const allActions = [];
@@ -427,7 +435,7 @@ function generateSOP() {
 
     // ── Build voice segments from narration events ──
     // Narration events are the source of truth; VOICE_STARTED/VOICE_ENDED are best-effort hints.
-    const finalNarrations = state.narrations.filter(n => n.isFinal && n.text && n.text.trim());
+    const finalNarrations = state.narrations.filter(n => n.isFinal && isMeaningfulNarrationText(n.text));
 
     // Estimate time range for each narration
     // narration.timestamp = when text was recognized (after STT latency)

@@ -29,6 +29,15 @@
     function switchView(v) { currentView = v; Object.entries(views).forEach(([k, el]) => el.classList.toggle('active', k === v)); }
     function fmtTime(ms) { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
     function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2000); }
+    function normalizeNarrationText(text) {
+        return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    }
+    function isMeaningfulNarration(text) {
+        const normalized = normalizeNarrationText(text);
+        if (!normalized) return false;
+        const core = normalized.replace(/[.。,…，、!！?？~～\-—_·•:：;；'"`“”‘’()（）[\]【】{}<>《》|\\/+=*&^%$#@\s]/g, '');
+        return core.length > 0;
+    }
     function escapeHtml(value) {
         return String(value == null ? '' : value)
             .replace(/&/g, '&amp;')
@@ -219,8 +228,6 @@
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'SpeechStarted') {
-                    // Create voice placeholder at current position in timeline
-                    updateInterimNarration('…');
                     chrome.runtime.sendMessage({
                         type: 'VOICE_STARTED',
                         timestamp: Date.now() - startTime,
@@ -235,18 +242,23 @@
                 if (msg.type === 'Results' && msg.channel) {
                     const alt = msg.channel.alternatives[0];
                     if (!alt || !alt.transcript) return;
-                    const transcript = alt.transcript;
+                    const transcript = normalizeNarrationText(alt.transcript);
                     if (msg.is_final) {
                         pendingInterimNarration = '';
                         const ts = Date.now() - startTime;
-                        if (transcript.trim()) {
-                            lastFinalNarrationText = transcript.trim();
+                        if (isMeaningfulNarration(transcript)) {
+                            lastFinalNarrationText = transcript;
                             chrome.runtime.sendMessage({ type: 'NARRATION_EVENT', text: transcript, timestamp: ts, isFinal: true });
                             appendNarrationToTimeline(transcript, ts);
                         }
                     } else {
-                        pendingInterimNarration = transcript.trim();
-                        updateInterimNarration(transcript);
+                        pendingInterimNarration = transcript;
+                        if (isMeaningfulNarration(transcript)) {
+                            updateInterimNarration(transcript);
+                        } else {
+                            const interim = evList.querySelector('.tl-narration-interim');
+                            if (interim) interim.remove();
+                        }
                     }
                 }
             } catch (e) { /* ignore */ }
@@ -267,8 +279,11 @@
     }
 
     function flushPendingInterimNarration() {
-        const text = (pendingInterimNarration || '').trim();
-        if (!text) return;
+        const text = normalizeNarrationText(pendingInterimNarration || '');
+        if (!isMeaningfulNarration(text)) {
+            pendingInterimNarration = '';
+            return;
+        }
         if (text === lastFinalNarrationText) {
             pendingInterimNarration = '';
             return;
@@ -379,7 +394,8 @@
     }
 
     function appendNarrationToTimeline(text, timestamp) {
-        if (!text || !text.trim()) return;
+        const normalized = normalizeNarrationText(text);
+        if (!isMeaningfulNarration(normalized)) return;
         clearPlaceholder();
 
         // Check for interim narration — convert it in-place (preserves position in timeline)
@@ -390,7 +406,7 @@
             const span = interim.querySelector('.tl-narr-text');
             if (span) {
                 span.classList.remove('voice-interim');
-                span.textContent = text;
+                span.textContent = normalized;
             }
             evList.scrollTop = evList.scrollHeight;
             updateStepCount();
@@ -401,7 +417,7 @@
         const last = getLastTimelineItem();
         if (last && last.classList.contains('tl-narration')) {
             const span = last.querySelector('.tl-narr-text');
-            if (span) span.textContent += text;
+            if (span) span.textContent += normalized;
         } else {
             const d = document.createElement('div');
             d.className = 'tl-narration';
@@ -410,7 +426,7 @@
             icon.textContent = '🎙️';
             const safeText = document.createElement('span');
             safeText.className = 'tl-narr-text';
-            safeText.textContent = text;
+            safeText.textContent = normalized;
             d.appendChild(icon);
             d.appendChild(safeText);
             evList.appendChild(d);
@@ -420,7 +436,8 @@
     }
 
     function updateInterimNarration(text) {
-        if (!text || !text.trim()) return;
+        const normalized = normalizeNarrationText(text);
+        if (!isMeaningfulNarration(normalized)) return;
         clearPlaceholder();
         let interim = evList.querySelector('.tl-narration-interim');
         if (!interim) {
@@ -436,7 +453,7 @@
             evList.appendChild(interim);
         }
         const span = interim.querySelector('.tl-narr-text');
-        if (span) span.textContent = text;
+        if (span) span.textContent = normalized;
         evList.scrollTop = evList.scrollHeight;
     }
 
@@ -470,6 +487,21 @@
                     lastPill.textContent = `${icon} ${label}`;
                     lastPill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${label}`);
                     return; // Updated in place, no new pill needed
+                }
+            }
+        }
+
+        // Merge continuous scrolls to one pill in live timeline.
+        if (ev.actionType === 'scroll') {
+            const last = getLastTimelineItem();
+            if (last && last.classList.contains('tl-actions')) {
+                const tail = last.lastElementChild;
+                if (tail && tail.classList.contains('ev-pill') && tail.getAttribute('data-type') === 'scroll') {
+                    const count = Number(tail.getAttribute('data-count') || '1') + 1;
+                    tail.setAttribute('data-count', String(count));
+                    tail.textContent = `${icon} 滚动 x${count}`;
+                    tail.setAttribute('title', `${fmtTime(ev.timestamp)} — 滚动（合并 ${count} 次）`);
+                    return;
                 }
             }
         }
