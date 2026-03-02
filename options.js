@@ -39,13 +39,11 @@
         const key = keyInput.value.trim();
         const lang = langSelect.value;
 
-        if (!key) {
-            showStatus('⚠️ 请输入 API Key', false);
-            return;
-        }
+        const data = { deepgramLang: lang };
+        if (key) data.deepgramKey = key;
 
-        chrome.storage.local.set({ deepgramKey: key, deepgramLang: lang }, () => {
-            showStatus('✅ 设置已保存', true);
+        chrome.storage.local.set(data, () => {
+            showStatus(key ? '✅ 设置已保存' : '⚠️ 未配置 API Key，无法开始录制', Boolean(key));
         });
     });
 

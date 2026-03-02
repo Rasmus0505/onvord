@@ -18,16 +18,7 @@
       <div class="hero">
         <p class="hero-kicker">BROWSER SOP RECORDER</p>
         <div class="logo-icon">
-          <svg viewBox="0 0 48 48" fill="none">
-            <circle cx="24" cy="24" r="22" stroke="url(#g1)" stroke-width="3" />
-            <path d="M18 16L34 24L18 32V16Z" fill="url(#g1)" />
-            <defs>
-              <linearGradient id="g1" x1="0" y1="0" x2="48" y2="48">
-                <stop offset="0%" stop-color="#2f80ff" />
-                <stop offset="100%" stop-color="#0b5fff" />
-              </linearGradient>
-            </defs>
-          </svg>
+          <img src="icons/logo.png" alt="Onvord" />
         </div>
         <h1 class="logo-text">Onvord</h1>
         <p class="tagline">一边操作，一边讲解<br>AI 立即学会流程</p>
@@ -39,25 +30,29 @@
         <div class="inst"><span class="inst-n">4</span><span>完成后生成 SOP，发送给 AI</span></div>
       </div>
       <button id="btn-start" class="btn btn-primary btn-lg"><span class="bi">⏺</span>开始录制</button>
-      <a href="#" id="link-settings" class="settings-link">设置语音识别 API Key</a>
+      <a href="#" id="link-settings" class="settings-link">语音识别设置</a>
     </div>
 
     <!-- ② 录制中 -->
     <div id="view-recording" class="view">
       <div class="rec-bar">
         <div class="rec-ind"><span class="rec-dot"></span><span class="rec-label">录制中</span></div>
-        <div id="rec-timer" class="rec-timer">00:00</div>
+        <div class="rec-right">
+          <span id="mic-status" class="mic-status" title="语音识别">
+            <span class="mic-icon">🎙️</span>
+            <span id="vol-indicator" class="vol-indicator">
+              <span class="vol-bar"></span><span class="vol-bar"></span><span class="vol-bar"></span><span class="vol-bar"></span><span class="vol-bar"></span>
+            </span>
+          </span>
+          <div id="rec-timer" class="rec-timer">00:00</div>
+        </div>
       </div>
-      <div class="section">
-        <h3 class="sec-title">语音识别 <span id="vol-indicator" class="vol-indicator"><span class="vol-bar"></span><span
-              class="vol-bar"></span><span class="vol-bar"></span><span class="vol-bar"></span><span
-              class="vol-bar"></span></span></h3>
-        <div id="voice-box" class="voice-box"><span class="placeholder">开始说话…</span></div>
-      </div>
+      <!-- Hidden voice-box for Deepgram state (not displayed) -->
+      <div id="voice-box" style="display:none"></div>
       <div class="section grow">
         <h3 class="sec-title">操作记录 <span id="ev-count" class="badge">0</span></h3>
         <div id="ev-list" class="ev-list">
-          <div class="placeholder">等待操作…</div>
+          <div class="placeholder">等待操作或说话…</div>
         </div>
       </div>
       <button id="btn-stop" class="btn btn-danger btn-lg"><span class="bi">⏹</span>停止录制</button>
@@ -73,8 +68,9 @@
         </div>
       </div>
       <div id="sop-steps" class="sop-steps"></div>
+      <p class="sop-tip">将导出的文件发给 AI，AI 即可学会该操作流程</p>
       <div class="sop-actions">
-        <button id="btn-export" class="btn btn-primary">导出网页</button>
+        <button id="btn-export" class="btn btn-primary">导出 SOP</button>
         <button id="btn-redo" class="btn btn-ghost">重新录制</button>
       </div>
     </div>

@@ -1,5 +1,24 @@
-// Offscreen document: annotate screenshot with click highlight
+// Offscreen document: annotate screenshot with click highlight + re-encoding
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+    // Re-encode screenshot at lower quality/resolution for file size control
+    if (msg.type === 'REENCODE_SCREENSHOT') {
+        const { dataUrl, quality, scale } = msg;
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.getElementById('c');
+            const w = Math.round(img.width * (scale || 1));
+            const h = Math.round(img.height * (scale || 1));
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            respond({ reencoded: canvas.toDataURL('image/jpeg', quality || 0.5) });
+        };
+        img.onerror = () => respond({ reencoded: dataUrl });
+        img.src = dataUrl;
+        return true;
+    }
+
     if (msg.type !== 'ANNOTATE_SCREENSHOT') return;
     const { dataUrl, clickX, clickY, viewportW, viewportH } = msg;
 

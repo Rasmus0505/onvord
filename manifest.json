@@ -7,9 +7,9 @@
     "activeTab",
     "scripting",
     "sidePanel",
-    "tabs",
     "offscreen",
-    "storage"
+    "storage",
+    "webNavigation"
   ],
   "options_page": "options.html",
   "host_permissions": [

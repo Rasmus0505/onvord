@@ -277,12 +277,12 @@
     <div class="container">
         <div class="head">
             <p class="kicker">Extension Settings</p>
-            <h1>Onvord 语音配置</h1>
-            <p class="subtitle">与官网视觉保持一致。这里只做页面重构，功能逻辑与存储流程保持原样。</p>
+            <h1>Onvord 语音设置</h1>
+            <p class="subtitle">Onvord 使用 Deepgram 进行语音识别。请先配置 API Key 后再开始录制。</p>
         </div>
 
         <div class="card">
-            <div class="card-title">语音识别（Deepgram）</div>
+            <div class="card-title">语音引擎（Deepgram）</div>
             <div class="field">
                 <label for="dg-key">API Key</label>
                 <div class="input-wrap">
@@ -315,10 +315,9 @@
         <div class="card">
             <div class="card-title">使用说明</div>
             <div class="notes">
-                <p>• Onvord 使用 Deepgram 进行实时语音转文字。</p>
+                <p>• Onvord 仅使用 Deepgram 进行语音识别。</p>
+                <p>• 未配置 API Key 时，录制按钮会被禁用。</p>
                 <p>• 你的 API Key 仅存储在本地浏览器中，不会上传到任何服务器。</p>
-                <p>• 如果不配置 API Key，语音识别功能将不可用。</p>
-                <p>• 未来将支持更多语音引擎（如讯飞等）。</p>
             </div>
         </div>
     </div>

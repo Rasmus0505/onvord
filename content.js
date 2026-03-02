@@ -1,9 +1,15 @@
-// Onvord Content Script — 录制浏览器操作
+// Onvord Content Script — Phase 2 Enhanced
 (function () {
   'use strict';
 
+  // Guard against duplicate injection
+  if (window.__onvord_injected) return;
+  window.__onvord_injected = true;
+
   let isRecording = false;
+  let isPaused = false;
   let recordingStartTime = 0;
+  let listenersAttached = false;
 
   /* ── Utilities ── */
 
@@ -12,8 +18,33 @@
     return function (...a) { clearTimeout(t); t = setTimeout(() => fn.apply(this, a), delay); };
   }
 
+  /* ── XPath Generation ── */
+  function getXPath(el) {
+    if (el.id) return `//*[@id="${el.id}"]`;
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType === Node.ELEMENT_NODE) {
+      let idx = 0;
+      let sib = cur.previousSibling;
+      while (sib) {
+        if (sib.nodeType === Node.ELEMENT_NODE && sib.tagName === cur.tagName) idx++;
+        sib = sib.previousSibling;
+      }
+      const tag = cur.tagName.toLowerCase();
+      const hasSameTagSibling = idx > 0 ||
+        (cur.parentNode && Array.from(cur.parentNode.children).filter(c => c.tagName === cur.tagName).length > 1);
+      parts.unshift(hasSameTagSibling ? `${tag}[${idx + 1}]` : tag);
+      cur = cur.parentNode;
+      if (cur === document) break;
+    }
+    return '/' + parts.join('/');
+  }
+
+  /* ── Selector with Confidence ── */
   function getSelector(el) {
     if (el.id) return '#' + CSS.escape(el.id);
+
+    // Shadow DOM: walk up through shadow roots
     const path = [];
     let cur = el;
     while (cur && cur !== document.body && cur !== document.documentElement) {
@@ -23,15 +54,46 @@
         const cls = cur.className.trim().split(/\s+/).filter(c => c && !/^\d/.test(c) && c.length < 30).slice(0, 2);
         if (cls.length) sel += '.' + cls.map(CSS.escape).join('.');
       }
-      const parent = cur.parentElement;
-      if (parent) {
-        const sibs = Array.from(parent.children).filter(c => c.tagName === cur.tagName);
+      const parent = cur.parentElement || (cur.getRootNode && cur.getRootNode()).host;
+      if (parent && parent !== document) {
+        const sibs = Array.from(parent.children || []).filter(c => c.tagName === cur.tagName);
         if (sibs.length > 1) sel += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
       }
       path.unshift(sel);
-      cur = cur.parentElement;
+      cur = parent;
     }
     return path.join(' > ');
+  }
+
+  function getSelectorWithConfidence(el) {
+    const xpath = getXPath(el);
+    let selector = '';
+    let confidence = 'low';
+
+    // Priority: id > data-testid/data-cy > aria-label/role > composite
+    if (el.id) {
+      selector = '#' + CSS.escape(el.id);
+      confidence = 'high';
+    } else if (el.getAttribute('data-testid')) {
+      selector = `[data-testid="${el.getAttribute('data-testid')}"]`;
+      confidence = 'high';
+    } else if (el.getAttribute('data-cy')) {
+      selector = `[data-cy="${el.getAttribute('data-cy')}"]`;
+      confidence = 'high';
+    } else if (el.getAttribute('aria-label')) {
+      const tag = el.tagName.toLowerCase();
+      selector = `${tag}[aria-label="${el.getAttribute('aria-label')}"]`;
+      confidence = 'medium';
+    } else if (el.getAttribute('role')) {
+      const tag = el.tagName.toLowerCase();
+      selector = `${tag}[role="${el.getAttribute('role')}"]`;
+      confidence = 'medium';
+    } else {
+      selector = getSelector(el);
+      confidence = 'low';
+    }
+
+    return { selector, xpath, selector_confidence: confidence };
   }
 
   // Friendly names for common tags
@@ -54,7 +116,10 @@
   const ICON_TAGS = new Set(['mat-icon', 'ion-icon', 'fa-icon', 'svg']);
 
   // Large layout containers to skip
-  const LAYOUT_TAGS = new Set(['body', 'html', 'main', 'article', 'section', 'header', 'footer', 'aside']);
+  const LAYOUT_TAGS = new Set(['body', 'html', 'main', 'article', 'section', 'header', 'footer', 'aside', 'nav', 'form', 'ul', 'ol', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'dl']);
+
+  // Keypress keys to capture (Backspace/Delete excluded — they are editing operations, not SOP steps)
+  const CAPTURE_KEYS = new Set(['Enter', 'Tab', 'Escape']);
 
   function getDirectText(el) {
     let text = '';
@@ -74,7 +139,6 @@
       const role = cur.getAttribute('role') || '';
       if (INTERACTIVE_ROLES.has(role)) return cur;
       if (cur.getAttribute('onclick') || cur.getAttribute('tabindex')) return cur;
-      // Check for aria-label (usually means it's intentionally interactive)
       if (cur.getAttribute('aria-label')) return cur;
       cur = cur.parentElement;
     }
@@ -84,31 +148,54 @@
   /* ── Should we skip this click? ── */
   function isBlankClick(el) {
     const tag = el.tagName.toLowerCase();
-
-    // Always skip body/html
     if (tag === 'body' || tag === 'html') return true;
-
-    // Skip large layout containers with no interactive role
     if (LAYOUT_TAGS.has(tag)) {
       const role = el.getAttribute('role') || '';
       if (!INTERACTIVE_ROLES.has(role) && !el.getAttribute('onclick')) return true;
     }
-
-    // Skip large generic divs/spans that cover most of the viewport
-    if (tag === 'div' || tag === 'span' || tag === 'p') {
+    if (tag === 'div' || tag === 'span' || tag === 'p' || tag === 'li' || tag === 'td' || tag === 'th') {
       const r = el.getBoundingClientRect();
       const vw = window.innerWidth, vh = window.innerHeight;
-      if (r.width > vw * 0.8 && r.height > vh * 0.6) return true;
+      // Large container — almost certainly a background area
+      if (r.width > vw * 0.6 && r.height > vh * 0.4) return true;
     }
-
     return false;
+  }
+
+  /* ── Is this a non-interactive generic element after walking up? ── */
+  function isGenericContainer(el) {
+    const tag = el.tagName.toLowerCase();
+    if (INTERACTIVE_TAGS.has(tag)) return false;
+    const role = el.getAttribute('role') || '';
+    if (INTERACTIVE_ROLES.has(role)) return false;
+    if (el.getAttribute('onclick') || el.getAttribute('tabindex')) return false;
+    // Has cursor:pointer style — likely intentionally clickable
+    try { if (getComputedStyle(el).cursor === 'pointer') return false; } catch {}
+    // Generic div/span/p/li without explicit interactive signals
+    const generic = new Set(['div', 'span', 'p', 'li', 'td', 'th', 'dd', 'dt', 'figcaption', 'figure', 'blockquote', 'pre', 'code']);
+    return generic.has(tag);
+  }
+
+  function isTextEntryTarget(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'textarea') return true;
+    if (el.isContentEditable) return true;
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (role === 'textbox' || role === 'searchbox') return true;
+    if (tag !== 'input') return false;
+    const type = (el.type || 'text').toLowerCase();
+    const nonTextTypes = new Set([
+      'button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color',
+      'file', 'image', 'hidden', 'date', 'datetime-local', 'month', 'week', 'time'
+    ]);
+    return !nonTextTypes.has(type);
   }
 
   function describeElement(el) {
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') || '';
 
-    // 1. Explicit accessible label
     const explicitLabel = el.getAttribute('aria-label') || el.getAttribute('placeholder')
       || el.getAttribute('title') || el.getAttribute('alt') || '';
     if (explicitLabel.trim()) {
@@ -117,15 +204,12 @@
       return friendly ? `${friendly}「${label}」` : `「${label}」`;
     }
 
-    // 2. Icon elements
     if (ICON_TAGS.has(tag) || role === 'img') {
-      // Try parent's aria-label for context
       const parentLabel = el.parentElement?.getAttribute('aria-label') || el.parentElement?.getAttribute('title') || '';
       if (parentLabel.trim()) return `图标「${parentLabel.trim().substring(0, 20)}」`;
       return '图标';
     }
 
-    // 3. <i> tag with icon classes
     if (tag === 'i') {
       const cls = el.className || '';
       if (/icon|fa-|material|bi-/i.test(cls)) {
@@ -135,7 +219,6 @@
       }
     }
 
-    // 4. Direct text of the element
     let directText = getDirectText(el);
     if (!directText && el.children.length <= 2) {
       directText = (el.innerText || '').trim().substring(0, 30);
@@ -146,14 +229,13 @@
       return friendly ? `${friendly}「${short}」` : `「${short}」`;
     }
 
-    // 5. Friendly tag name or role
     if (TAG_NAMES[tag]) return TAG_NAMES[tag];
     if (INTERACTIVE_ROLES.has(role)) {
       const roleNames = { button: '按钮', link: '链接', textbox: '输入框', tab: '标签页', menuitem: '菜单项', checkbox: '复选框', radio: '单选框', switch: '开关', option: '选项' };
       return roleNames[role] || role;
     }
 
-    return null; // Return null to indicate we couldn't describe it well
+    return null;
   }
 
   function rect(el) {
@@ -162,27 +244,155 @@
   }
 
   function send(data) {
-    if (!isRecording) return;
+    if (!isRecording || isPaused) return;
     chrome.runtime.sendMessage({
       type: 'ACTION_EVENT',
       data: { ...data, timestamp: Date.now() - recordingStartTime, url: location.href, pageTitle: document.title }
     });
   }
 
+  /* ── Floating Mic Indicator ── */
+  let micIndicatorEl = null;
+
+  function injectMicIndicator() {
+    if (micIndicatorEl) return;
+    micIndicatorEl = document.createElement('div');
+    micIndicatorEl.id = 'onvord-mic-indicator';
+    micIndicatorEl.setAttribute('style', [
+      'position:fixed', 'bottom:20px', 'right:20px', 'z-index:2147483647',
+      'width:40px', 'height:40px', 'border-radius:50%',
+      'background:rgba(229,72,77,0.9)', 'color:#fff',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'font-size:18px', 'box-shadow:0 4px 14px rgba(229,72,77,0.4)',
+      'cursor:default', 'user-select:none', 'pointer-events:none',
+      'animation:onvord-pulse 1.5s ease-in-out infinite',
+      'font-family:-apple-system,BlinkMacSystemFont,sans-serif'
+    ].join(';'));
+    micIndicatorEl.textContent = '🎙️';
+    micIndicatorEl.title = 'Onvord 录制中';
+
+    // Inject pulse animation
+    const style = document.createElement('style');
+    style.id = 'onvord-mic-style';
+    style.textContent = '@keyframes onvord-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.08);opacity:0.75}}';
+    document.head.appendChild(style);
+    document.body.appendChild(micIndicatorEl);
+  }
+
+  function removeMicIndicator() {
+    if (micIndicatorEl) { micIndicatorEl.remove(); micIndicatorEl = null; }
+    const style = document.getElementById('onvord-mic-style');
+    if (style) style.remove();
+  }
+
+  function updateMicIndicatorPaused(paused) {
+    if (!micIndicatorEl) return;
+    if (paused) {
+      micIndicatorEl.style.background = 'rgba(120,120,120,0.7)';
+      micIndicatorEl.style.animationPlayState = 'paused';
+      micIndicatorEl.textContent = '⏸️';
+    } else {
+      micIndicatorEl.style.background = 'rgba(229,72,77,0.9)';
+      micIndicatorEl.style.animationPlayState = 'running';
+      micIndicatorEl.textContent = '🎙️';
+    }
+  }
+
+  /* ── Scroll Filtering ── */
+  let pendingScroll = null;
+  let scrollBufferTimer = null;
+  let scrollAnchor = null; // Tracks where a scroll sequence started
+
+  function handleScroll() {
+    if (!isRecording || isPaused) return;
+
+    const scrollY = window.scrollY;
+    const viewportH = window.innerHeight;
+
+    clearTimeout(scrollBufferTimer);
+
+    // Set anchor on first scroll of a sequence
+    if (scrollAnchor === null) {
+      scrollAnchor = scrollY;
+    }
+
+    // Total distance from scroll start, not just between consecutive events
+    const totalDelta = Math.abs(scrollY - scrollAnchor);
+
+    // Large scroll (>50% viewport): record immediately
+    if (totalDelta > viewportH * 0.5) {
+      pendingScroll = null;
+      send({
+        actionType: 'scroll',
+        scrollY,
+        scrollDelta: totalDelta,
+        viewportH
+      });
+      scrollAnchor = scrollY; // Reset anchor for next segment
+      return;
+    }
+
+    // Small scroll: buffer and send as PENDING_SCROLL after 500ms idle
+    pendingScroll = { scrollY, timestamp: Date.now() - recordingStartTime };
+
+    scrollBufferTimer = setTimeout(() => {
+      if (pendingScroll) {
+        chrome.runtime.sendMessage({
+          type: 'PENDING_SCROLL',
+          data: {
+            actionType: 'scroll',
+            scrollY: pendingScroll.scrollY,
+            timestamp: pendingScroll.timestamp,
+            url: location.href,
+            pageTitle: document.title
+          }
+        }).catch(() => {});
+        pendingScroll = null;
+      }
+      scrollAnchor = null; // Reset anchor after scroll sequence ends
+    }, 500);
+  }
+
+  /* ── Click/Select Debounce ── */
+  let lastActionKey = '';
+  let lastActionTime = 0;
+  const ACTION_DEBOUNCE_MS = 500;
+
+  function isDuplicateAction(key) {
+    const now = Date.now();
+    if (key === lastActionKey && (now - lastActionTime) < ACTION_DEBOUNCE_MS) {
+      return true;
+    }
+    lastActionKey = key;
+    lastActionTime = now;
+    return false;
+  }
+
   /* ── Handlers ── */
 
   function onMouseUp(e) {
-    if (!isRecording) return;
+    if (!isRecording || isPaused) return;
 
     // Check if text was selected
     const sel = window.getSelection();
     const selectedText = (sel ? sel.toString() : '').trim();
     if (selectedText.length > 1) {
-      // This is a text selection, not a click
+      // Debounce: skip same text selected rapidly
+      const selectKey = 'select:' + selectedText.substring(0, 50);
+      if (isDuplicateAction(selectKey)) return;
+
+      const selectorInfo = getSelectorWithConfidence(e.target);
       send({
         actionType: 'select',
         value: selectedText.substring(0, 200),
-        target: { tag: e.target.tagName.toLowerCase(), selector: getSelector(e.target), description: `选择文字「${selectedText.substring(0, 30)}」`, rect: rect(e.target) },
+        target: {
+          tag: e.target.tagName.toLowerCase(),
+          selector: selectorInfo.selector,
+          xpath: selectorInfo.xpath,
+          selector_confidence: selectorInfo.selector_confidence,
+          description: `选择文字「${selectedText.substring(0, 30)}」`,
+          rect: rect(e.target)
+        },
         clickX: e.clientX, clickY: e.clientY,
         viewportW: window.innerWidth, viewportH: window.innerHeight
       });
@@ -191,61 +401,148 @@
 
     // Regular click handling
     let t = e.target;
-
-    // Skip blank/background clicks
     if (isBlankClick(t)) return;
 
-    // Try to find a more meaningful target
     const meaningful = findMeaningfulTarget(t);
     if (meaningful !== t) t = meaningful;
 
-    // Describe the element
+    // Text entry focus click is redundant; input event already captures value + locator.
+    if (isTextEntryTarget(t)) return;
+
+    // After walking up, if target is still a generic container, skip it
+    if (isGenericContainer(t)) return;
+
     const desc = describeElement(t);
-    if (!desc) return; // Can't describe → skip (likely a meaningless container)
+    if (!desc) return;
+
+    // Debounce: skip same element clicked rapidly
+    const selectorInfo = getSelectorWithConfidence(t);
+    const clickKey = 'click:' + selectorInfo.selector;
+    if (isDuplicateAction(clickKey)) return;
 
     send({
       actionType: 'click',
-      target: { tag: t.tagName.toLowerCase(), text: getDirectText(t).substring(0, 40), selector: getSelector(t), description: desc, rect: rect(t) },
+      target: {
+        tag: t.tagName.toLowerCase(),
+        text: getDirectText(t).substring(0, 40),
+        selector: selectorInfo.selector,
+        xpath: selectorInfo.xpath,
+        selector_confidence: selectorInfo.selector_confidence,
+        description: desc,
+        rect: rect(t)
+      },
       clickX: e.clientX, clickY: e.clientY,
       viewportW: window.innerWidth, viewportH: window.innerHeight
     });
   }
 
   const onInput = debounce(function (e) {
-    if (!isRecording) return;
+    if (!isRecording || isPaused) return;
     const t = e.target;
-    const val = (t.value || t.textContent || '').substring(0, 200);
+    let val = (t.value || t.textContent || '').substring(0, 200);
     if (!val.trim()) return;
-    send({ actionType: 'input', target: { tag: t.tagName.toLowerCase(), selector: getSelector(t), description: describeElement(t) || '输入框', rect: rect(t) }, value: val });
+
+    // Password masking
+    if (t.type === 'password') {
+      val = '***';
+    }
+
+    const selectorInfo = getSelectorWithConfidence(t);
+    send({
+      actionType: 'input',
+      target: {
+        tag: t.tagName.toLowerCase(),
+        selector: selectorInfo.selector,
+        xpath: selectorInfo.xpath,
+        selector_confidence: selectorInfo.selector_confidence,
+        description: describeElement(t) || '输入框',
+        rect: rect(t)
+      },
+      value: val
+    });
   }, 1500);
 
-  let scrollT = null;
-  function onScroll() {
-    if (!isRecording || scrollT) return;
-    scrollT = setTimeout(() => { send({ actionType: 'scroll', scrollY: window.scrollY }); scrollT = null; }, 1000);
+  /* ── Keypress Handler ── */
+  function onKeyDown(e) {
+    if (!isRecording || isPaused) return;
+
+    const hasModifier = e.ctrlKey || e.metaKey || e.altKey;
+    // Capture special keys or modifier combos (but not standalone Shift)
+    if (!CAPTURE_KEYS.has(e.key) && !hasModifier) return;
+    // Skip lone modifier keys
+    if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return;
+
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.metaKey) parts.push('Cmd');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey && hasModifier) parts.push('Shift');
+    parts.push(e.key);
+    const combo = parts.join('+');
+
+    const t = e.target;
+    const selectorInfo = getSelectorWithConfidence(t);
+    send({
+      actionType: 'keypress',
+      value: combo,
+      target: {
+        tag: t.tagName.toLowerCase(),
+        selector: selectorInfo.selector,
+        xpath: selectorInfo.xpath,
+        selector_confidence: selectorInfo.selector_confidence,
+        description: describeElement(t) || t.tagName.toLowerCase(),
+        rect: rect(t)
+      }
+    });
   }
 
   /* ── Recording control ── */
 
   function start(startTime) {
+    const wasRecording = isRecording;
     isRecording = true;
+    isPaused = false;
     recordingStartTime = startTime;
-    document.addEventListener('mouseup', onMouseUp, true);
-    document.addEventListener('input', onInput, true);
-    window.addEventListener('scroll', onScroll, { passive: true });
-    send({ actionType: 'navigate', pageTitle: document.title });
+    if (!listenersAttached) {
+      document.addEventListener('mouseup', onMouseUp, true);
+      document.addEventListener('input', onInput, true);
+      document.addEventListener('keydown', onKeyDown, true);
+      window.addEventListener('scroll', handleScroll, { passive: true });
+      listenersAttached = true;
+    }
+    if (!wasRecording) {
+      send({ actionType: 'navigate', pageTitle: document.title, from_url: document.referrer || null });
+    }
   }
 
   function stop() {
     isRecording = false;
-    document.removeEventListener('mouseup', onMouseUp, true);
-    document.removeEventListener('input', onInput, true);
-    window.removeEventListener('scroll', onScroll);
+    isPaused = false;
+    if (listenersAttached) {
+      document.removeEventListener('mouseup', onMouseUp, true);
+      document.removeEventListener('input', onInput, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('scroll', handleScroll);
+      listenersAttached = false;
+    }
+    clearTimeout(scrollBufferTimer);
+    pendingScroll = null;
+  }
+
+  function pause() {
+    isPaused = true;
+  }
+
+  function resume() {
+    isPaused = false;
+    updateMicIndicatorPaused(false);
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (msg.type === 'START_RECORDING') { start(msg.startTime); respond({ ok: true }); }
     else if (msg.type === 'STOP_RECORDING') { stop(); respond({ ok: true }); }
+    else if (msg.type === 'PAUSE_RECORDING') { pause(); respond({ ok: true }); }
+    else if (msg.type === 'RESUME_RECORDING') { resume(); respond({ ok: true }); }
     else if (msg.type === 'PING') { respond({ ok: true, isRecording }); }
     return true;
   });

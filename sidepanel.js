@@ -6,7 +6,7 @@
     let startTime = 0;
     let timer = null;
     let currentSOP = null;
-    let evCount = 0;
+    // evCount removed — step count now derived from timeline groups
     let audioCtx = null;
     let analyser = null;
     let micStream = null;
@@ -21,6 +21,7 @@
     const evList = $('ev-list'), evCountBadge = $('ev-count');
     const sopTitle = $('sop-title'), sopCount = $('sop-count'), sopDur = $('sop-dur'), sopSteps = $('sop-steps');
     const toastEl = $('toast');
+    const micStatusEl = $('mic-status');
     const volIndicator = $('vol-indicator');
     const volBars = volIndicator ? Array.from(volIndicator.querySelectorAll('.vol-bar')) : [];
 
@@ -28,9 +29,55 @@
     function switchView(v) { currentView = v; Object.entries(views).forEach(([k, el]) => el.classList.toggle('active', k === v)); }
     function fmtTime(ms) { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
     function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2000); }
+    function escapeHtml(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+    function normalizeExternalUrl(url) {
+        if (!url) return '';
+        try {
+            const u = new URL(url);
+            if (u.protocol === 'http:' || u.protocol === 'https:') return u.toString();
+        } catch { /* noop */ }
+        return '';
+    }
+    function normalizeImageSrc(src) {
+        const s = String(src || '');
+        if (s.startsWith('data:image/')) return s;
+        if (s.startsWith('http://') || s.startsWith('https://')) return s;
+        return '';
+    }
+    function safeFilename(name) {
+        return String(name || 'SOP')
+            .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+            .replace(/\s+/g, '_')
+            .slice(0, 120);
+    }
+    function openMicPermissionGuide() {
+        try {
+            chrome.tabs.create({ url: chrome.runtime.getURL('mic-permission.html') });
+        } catch (e) {
+            console.warn('Open mic permission guide failed:', e);
+        }
+    }
+
+    let isPaused = false;
+    let pausedDuration = 0;
 
     function evIcon(t) {
-        switch (t) { case 'click': return '👆'; case 'input': return '⌨️'; case 'navigate': return '🔗'; case 'scroll': return '📜'; case 'select': return '📋'; default: return '⚡'; }
+        switch (t) {
+            case 'click': return '👆';
+            case 'input': return '⌨️';
+            case 'navigate': case 'navigation': return '🔗';
+            case 'scroll': return '📍';
+            case 'select': return '📋';
+            case 'keypress': return '⌨️';
+            default: return '⚡';
+        }
     }
 
     /* ── Audio Volume Visualizer ── */
@@ -66,28 +113,73 @@
         volBars.forEach(b => b.style.height = '3px');
     }
 
-    /* ── Deepgram WebSocket STT ── */
+    /* ── Speech-to-Text Engine ── */
+    let sttEngine = null;
     let dgSocket = null;
     let mediaRecorder = null;
+    let sttStream = null;
+    let sttLastFailure = '';
+    let preferredMicDeviceId = '';
+    let pendingInterimNarration = '';
+    let lastFinalNarrationText = '';
 
-    async function initDeepgram(stream) {
-        // Load API key and language from storage
-        const data = await new Promise(r => chrome.storage.local.get(['deepgramKey', 'deepgramLang'], r));
-        const apiKey = data.deepgramKey;
-        const lang = data.deepgramLang || 'zh';
+    async function ensureMicPermission() {
+        const permissionState = await navigator.permissions.query({ name: 'microphone' })
+            .then(r => r.state)
+            .catch(() => 'unknown');
+        const audioInputs = await navigator.mediaDevices.enumerateDevices()
+            .then(list => list.filter(d => d.kind === 'audioinput'))
+            .catch(() => []);
+        console.info('Onvord mic permission state:', permissionState);
+        console.info('Onvord audioinput devices:', audioInputs.map((d, i) => ({
+            idx: i,
+            label: d.label || '(no-label)',
+            idTail: (d.deviceId || '').slice(-8)
+        })));
 
-        if (!apiKey) {
-            voiceBox.innerHTML = '<span class="placeholder" style="color:var(--dn)">⚠️ 未配置语音识别。<a href="#" id="open-settings" style="color:var(--ac)">点击设置 Deepgram API Key</a></span>';
-            setTimeout(() => {
-                const link = document.getElementById('open-settings');
-                if (link) link.addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
-            }, 50);
-            return;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const defaultTrack = stream.getAudioTracks()[0];
+            const defaultId = defaultTrack?.getSettings?.().deviceId || '';
+            if (defaultId) preferredMicDeviceId = defaultId;
+            stream.getTracks().forEach(t => t.stop());
+            return { ok: true };
+        } catch (e) {
+            const name = e?.name || 'unknown';
+            console.warn('Microphone permission preflight failed:', name, e?.message || '');
+            if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError') {
+                // Fallback: default input may be stale/unavailable, retry each concrete input device id.
+                for (const dev of audioInputs) {
+                    if (!dev.deviceId) continue;
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({
+                            audio: { deviceId: { exact: dev.deviceId } }
+                        });
+                        stream.getTracks().forEach(t => t.stop());
+                        preferredMicDeviceId = dev.deviceId;
+                        return { ok: true };
+                    } catch { /* try next device */ }
+                }
+            }
+            return { ok: false, error: name, permissionState, deviceCount: audioInputs.length };
         }
+    }
 
-        let finalText = '';
+    async function getMicStreamForUse() {
+        if (preferredMicDeviceId) {
+            try {
+                return await navigator.mediaDevices.getUserMedia({
+                    audio: { deviceId: { exact: preferredMicDeviceId } }
+                });
+            } catch {
+                preferredMicDeviceId = '';
+            }
+        }
+        return await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
 
-        // Build WebSocket URL
+    /* ── Deepgram WebSocket STT ── */
+    function initDeepgram(stream, apiKey, lang, micStatusEl) {
         const params = new URLSearchParams({
             model: 'nova-2',
             language: lang === 'multi' ? 'multi' : lang,
@@ -102,16 +194,13 @@
         try {
             dgSocket = new WebSocket(wsUrl, ['token', apiKey]);
         } catch (e) {
-            voiceBox.innerHTML = '<span class="placeholder" style="color:var(--dn)">⚠️ WebSocket 创建失败</span>';
+            if (micStatusEl) micStatusEl.classList.add('error');
             console.error('Deepgram WS error:', e);
-            return;
+            return false;
         }
 
         dgSocket.onopen = () => {
             console.log('Deepgram connected');
-            voiceBox.innerHTML = '<span class="placeholder">🟢 语音识别已连接，开始说话…</span>';
-
-            // Start streaming audio via MediaRecorder
             try {
                 mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
                 mediaRecorder.ondataavailable = (e) => {
@@ -119,69 +208,161 @@
                         dgSocket.send(e.data);
                     }
                 };
-                mediaRecorder.start(250); // Send chunks every 250ms
+                mediaRecorder.start(250);
             } catch (e) {
                 console.error('MediaRecorder error:', e);
-                voiceBox.innerHTML = '<span class="placeholder" style="color:var(--dn)">⚠️ 录音启动失败</span>';
+                if (micStatusEl) micStatusEl.classList.add('error');
             }
         };
 
         dgSocket.onmessage = (event) => {
             try {
                 const msg = JSON.parse(event.data);
+                if (msg.type === 'SpeechStarted') {
+                    // Create voice placeholder at current position in timeline
+                    updateInterimNarration('…');
+                    chrome.runtime.sendMessage({
+                        type: 'VOICE_STARTED',
+                        timestamp: Date.now() - startTime,
+                        audio_start: msg.start || (Date.now() - startTime)
+                    }).catch(() => {});
+                    return;
+                }
+                if (msg.type === 'UtteranceEnd') {
+                    chrome.runtime.sendMessage({ type: 'VOICE_ENDED', timestamp: Date.now() - startTime }).catch(() => {});
+                    return;
+                }
                 if (msg.type === 'Results' && msg.channel) {
                     const alt = msg.channel.alternatives[0];
-                    if (!alt) return;
+                    if (!alt || !alt.transcript) return;
                     const transcript = alt.transcript;
-                    if (!transcript) return;
-
                     if (msg.is_final) {
-                        finalText += transcript;
+                        pendingInterimNarration = '';
                         const ts = Date.now() - startTime;
                         if (transcript.trim()) {
+                            lastFinalNarrationText = transcript.trim();
                             chrome.runtime.sendMessage({ type: 'NARRATION_EVENT', text: transcript, timestamp: ts, isFinal: true });
                             appendNarrationToTimeline(transcript, ts);
                         }
-                        // Update voicebox with final + clear interim
-                        voiceBox.innerHTML = finalText
-                            ? `<span class="voice-final">${finalText}</span>`
-                            : '<span class="placeholder">开始说话…</span>';
                     } else {
-                        // Interim result — show in voicebox
-                        let html = '';
-                        if (finalText) html += `<span class="voice-final">${finalText}</span>`;
-                        html += `<span class="voice-interim">${transcript}</span>`;
-                        voiceBox.innerHTML = html;
+                        pendingInterimNarration = transcript.trim();
+                        updateInterimNarration(transcript);
                     }
-                    voiceBox.scrollTop = voiceBox.scrollHeight;
                 }
-            } catch (e) { /* ignore non-JSON messages */ }
+            } catch (e) { /* ignore */ }
         };
 
         dgSocket.onerror = (e) => {
             console.error('Deepgram WS error:', e);
-            voiceBox.innerHTML = '<span class="placeholder" style="color:var(--dn)">⚠️ 语音识别连接错误</span>';
+            if (micStatusEl) micStatusEl.classList.add('error');
         };
 
         dgSocket.onclose = (e) => {
             console.log('Deepgram WS closed:', e.code, e.reason);
             if (currentView === 'recording' && e.code !== 1000) {
-                voiceBox.innerHTML += '<br><span class="placeholder" style="color:var(--dn)">连接已断开</span>';
+                if (micStatusEl) micStatusEl.classList.add('error');
             }
         };
+        return true;
     }
 
-    function stopDeepgram() {
+    function flushPendingInterimNarration() {
+        const text = (pendingInterimNarration || '').trim();
+        if (!text) return;
+        if (text === lastFinalNarrationText) {
+            pendingInterimNarration = '';
+            return;
+        }
+        const ts = Date.now() - startTime;
+        pendingInterimNarration = '';
+        lastFinalNarrationText = text;
+        chrome.runtime.sendMessage({ type: 'NARRATION_EVENT', text, timestamp: ts, isFinal: true }).catch(() => {});
+        appendNarrationToTimeline(text, ts);
+    }
+
+    function stopSTT(options = {}) {
+        const { flushInterim = true } = options;
+        if (flushInterim) {
+            flushPendingInterimNarration();
+        } else {
+            pendingInterimNarration = '';
+            lastFinalNarrationText = '';
+        }
+        // Stop Deepgram
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            try { mediaRecorder.stop(); } catch { }
+            try { mediaRecorder.stop(); } catch {}
         }
         mediaRecorder = null;
+        if (sttStream) {
+            sttStream.getTracks().forEach(t => t.stop());
+            sttStream = null;
+        }
         if (dgSocket) {
             if (dgSocket.readyState === WebSocket.OPEN) {
-                try { dgSocket.send(JSON.stringify({ type: 'CloseStream' })); } catch { }
-                dgSocket.close(1000);
+                try { dgSocket.send(JSON.stringify({ type: 'Finalize' })); } catch {}
+                setTimeout(() => {
+                    if (dgSocket && dgSocket.readyState === WebSocket.OPEN) {
+                        try { dgSocket.send(JSON.stringify({ type: 'CloseStream' })); } catch {}
+                        dgSocket.close(1000);
+                    }
+                }, 220);
             }
             dgSocket = null;
+        }
+        sttEngine = null;
+    }
+
+    async function initSTT() {
+        stopSTT({ flushInterim: false });
+        sttLastFailure = '';
+        micStatusEl?.classList.remove('error');
+
+        const data = await new Promise(resolve => {
+            chrome.storage.local.get(['deepgramKey', 'deepgramLang'], resolve);
+        });
+        const lang = data.deepgramLang || 'zh';
+        const apiKey = (data.deepgramKey || '').trim();
+
+        if (!apiKey) {
+            sttLastFailure = 'missing-key';
+            micStatusEl?.classList.add('error');
+            return false;
+        }
+
+        try {
+            // Deepgram needs an actual audio stream; preflight once more with device fallback.
+            const mic = await ensureMicPermission();
+            if (!mic.ok) {
+                if (mic.error === 'NotFoundError' || mic.error === 'DevicesNotFoundError') {
+                    if (mic.permissionState === 'denied') {
+                        sttLastFailure = 'mic-denied';
+                    } else {
+                        sttLastFailure = 'no-mic-device';
+                    }
+                } else if (mic.error === 'NotReadableError' || mic.error === 'TrackStartError' || mic.error === 'AbortError') {
+                    sttLastFailure = 'mic-unavailable';
+                } else {
+                    sttLastFailure = 'mic-denied';
+                }
+                micStatusEl?.classList.add('error');
+                return false;
+            }
+            sttStream = await getMicStreamForUse();
+            const deepgramStarted = initDeepgram(sttStream, apiKey, lang, micStatusEl);
+            if (!deepgramStarted) {
+                sttStream.getTracks().forEach(t => t.stop());
+                sttStream = null;
+                sttLastFailure = 'deepgram-init-failed';
+                micStatusEl?.classList.add('error');
+                return false;
+            }
+            sttEngine = 'deepgram';
+            return true;
+        } catch (e) {
+            console.error('Deepgram init failed:', e);
+            sttLastFailure = 'deepgram-init-failed';
+            micStatusEl?.classList.add('error');
+            return false;
         }
     }
 
@@ -201,34 +382,82 @@
         if (!text || !text.trim()) return;
         clearPlaceholder();
 
+        // Check for interim narration — convert it in-place (preserves position in timeline)
+        // This prevents speech from jumping to the end when actions arrive during STT latency
+        const interim = evList.querySelector('.tl-narration-interim');
+        if (interim) {
+            interim.classList.remove('tl-narration-interim');
+            const span = interim.querySelector('.tl-narr-text');
+            if (span) {
+                span.classList.remove('voice-interim');
+                span.textContent = text;
+            }
+            evList.scrollTop = evList.scrollHeight;
+            updateStepCount();
+            return;
+        }
+
+        // No interim — check if last item is narration, append to it
         const last = getLastTimelineItem();
         if (last && last.classList.contains('tl-narration')) {
-            // Append to existing narration block
             const span = last.querySelector('.tl-narr-text');
             if (span) span.textContent += text;
         } else {
-            // Create new narration block
             const d = document.createElement('div');
             d.className = 'tl-narration';
-            d.innerHTML = `<span class="tl-narr-icon">🎙️</span><span class="tl-narr-text">${text}</span>`;
+            const icon = document.createElement('span');
+            icon.className = 'tl-narr-icon';
+            icon.textContent = '🎙️';
+            const safeText = document.createElement('span');
+            safeText.className = 'tl-narr-text';
+            safeText.textContent = text;
+            d.appendChild(icon);
+            d.appendChild(safeText);
             evList.appendChild(d);
         }
         evList.scrollTop = evList.scrollHeight;
+        updateStepCount();
+    }
+
+    function updateInterimNarration(text) {
+        if (!text || !text.trim()) return;
+        clearPlaceholder();
+        let interim = evList.querySelector('.tl-narration-interim');
+        if (!interim) {
+            interim = document.createElement('div');
+            interim.className = 'tl-narration tl-narration-interim';
+            const icon = document.createElement('span');
+            icon.className = 'tl-narr-icon';
+            icon.textContent = '🎙️';
+            const span = document.createElement('span');
+            span.className = 'tl-narr-text voice-interim';
+            interim.appendChild(icon);
+            interim.appendChild(span);
+            evList.appendChild(interim);
+        }
+        const span = interim.querySelector('.tl-narr-text');
+        if (span) span.textContent = text;
+        evList.scrollTop = evList.scrollHeight;
+    }
+
+    function updateStepCount() {
+        // Count top-level timeline groups (narration blocks + action containers) as "big steps"
+        const groups = evList.querySelectorAll(':scope > .tl-narration:not(.tl-narration-interim), :scope > .tl-actions');
+        evCountBadge.textContent = groups.length;
     }
 
     function addActionPill(ev) {
-        evCount++;
-        evCountBadge.textContent = evCount;
         clearPlaceholder();
 
         const icon = evIcon(ev.actionType);
         let label = '';
         switch (ev.actionType) {
-            case 'click': label = ev.target?.description || '点击'; break;
+            case 'click': label = `点击 ${ev.target?.description || '元素'}`; break;
             case 'input': label = `输入「${(ev.value || '').substring(0, 15)}」`; break;
-            case 'navigate': label = ev.pageTitle || '页面'; break;
+            case 'navigate': case 'navigation': label = ev.pageTitle || '页面'; break;
             case 'scroll': label = '滚动'; break;
             case 'select': label = `选择「${(ev.value || '').substring(0, 15)}」`; break;
+            case 'keypress': label = ev.value || '快捷键'; break;
             default: label = ev.actionType;
         }
 
@@ -238,7 +467,7 @@
             if (last && last.classList.contains('tl-actions')) {
                 const lastPill = last.querySelector('.ev-pill[data-type="input"]:last-of-type');
                 if (lastPill) {
-                    lastPill.innerHTML = `${icon} ${label}`;
+                    lastPill.textContent = `${icon} ${label}`;
                     lastPill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${label}`);
                     return; // Updated in place, no new pill needed
                 }
@@ -249,7 +478,7 @@
         pill.className = 'ev-pill';
         pill.setAttribute('data-type', ev.actionType);
         pill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${label}`);
-        pill.innerHTML = `${icon} ${label}`;
+        pill.textContent = `${icon} ${label}`;
 
         const last = getLastTimelineItem();
         if (last && last.classList.contains('tl-actions')) {
@@ -261,96 +490,187 @@
             evList.appendChild(container);
         }
         evList.scrollTop = evList.scrollHeight;
+        updateStepCount();
     }
 
-    /* ── SOP rendering ── */
+    /* ── SOP rendering (segment-based) ── */
     function renderSOP(sop) {
         currentSOP = sop;
         sopTitle.textContent = sop.title;
-        sopCount.textContent = `${sop.totalSteps} 步骤`;
+        const segCount = (sop.segments || []).length || sop.totalSteps;
+        sopCount.textContent = `${segCount} 步骤`;
         sopDur.textContent = fmtTime(sop.duration);
         sopSteps.innerHTML = '';
 
-        sop.steps.forEach(s => {
-            const el = document.createElement('div'); el.className = 'sop-step';
+        const segs = sop.segments || [];
+        if (segs.length === 0 && sop.steps) {
+            // Fallback: no segments, render flat steps
+            segs.push({ type: 'silent', narration: '', steps: sop.steps });
+        }
 
-            // Style quoted content differently in the action description
-            const descHtml = s.action.description.replace(/[「"](.*?)[」"]/g, '<span class="step-act-val">「$1」</span>');
-            let html = `<div class="sop-hdr"><span class="step-n">${s.stepNumber}</span><span class="step-act">${descHtml}</span><span class="step-t">${s.timestamp}</span></div>`;
+        for (const seg of segs) {
+            const group = document.createElement('div');
+            group.className = seg.type === 'voice' ? 'sop-segment sop-seg-voice' : 'sop-segment sop-seg-silent';
 
-            let body = '';
-            if (s.narration && s.narration.trim()) body += `<div class="step-narr">${s.narration}</div>`;
-            if (s.screenshot) body += `<img class="step-img" src="${s.screenshot}" alt="步骤${s.stepNumber}" loading="lazy">`;
-            if (s.action.selector) {
-                body += `<details class="step-code-details"><summary class="step-code-summary">🔧 元素选择器</summary><div class="step-sel">${s.action.selector}</div></details>`;
+            // Voice segment header: narration + time range
+            if (seg.type === 'voice' && seg.narration) {
+                const hdr = document.createElement('div');
+                hdr.className = 'seg-narration';
+                const icon = document.createElement('span');
+                icon.className = 'seg-narr-icon';
+                icon.textContent = '🎙️';
+                const text = document.createElement('span');
+                text.className = 'seg-narr-text';
+                text.textContent = seg.narration;
+                hdr.appendChild(icon);
+                hdr.appendChild(text);
+                if (seg.timeRange) {
+                    const tm = document.createElement('span');
+                    tm.className = 'seg-narr-time';
+                    tm.textContent = seg.timeRange;
+                    hdr.appendChild(tm);
+                }
+                group.appendChild(hdr);
             }
 
-            if (body) html += `<div class="sop-body">${body}</div>`;
-            el.innerHTML = html;
-            sopSteps.appendChild(el);
-        });
+            // Steps within this segment
+            for (const s of (seg.steps || [])) {
+                const el = document.createElement('div');
+                el.className = 'sop-step';
+
+                const desc = s.action?.description || s.action?.type || '操作';
+                const hdr = document.createElement('div');
+                hdr.className = 'sop-hdr';
+
+                const n = document.createElement('span');
+                n.className = 'step-n';
+                n.textContent = String(s.stepNumber);
+                const act = document.createElement('span');
+                act.className = 'step-act';
+                act.textContent = desc;
+                const t = document.createElement('span');
+                t.className = 'step-t';
+                t.textContent = s.timestamp || '';
+                hdr.appendChild(n);
+                hdr.appendChild(act);
+                hdr.appendChild(t);
+                el.appendChild(hdr);
+
+                const hasBody = Boolean(s.screenshot || s.action?.selector);
+                if (hasBody) {
+                    const body = document.createElement('div');
+                    body.className = 'sop-body';
+                    if (s.screenshot) {
+                        const img = document.createElement('img');
+                        img.className = 'step-img';
+                        img.src = s.screenshot;
+                        img.alt = `步骤${s.stepNumber}`;
+                        img.loading = 'lazy';
+                        body.appendChild(img);
+                    }
+                    if (s.action?.selector) {
+                        const details = document.createElement('details');
+                        details.className = 'step-code-details';
+                        const summary = document.createElement('summary');
+                        summary.className = 'step-code-summary';
+                        summary.textContent = '🔧 执行细节（给 Agent）';
+                        const sel = document.createElement('div');
+                        sel.className = 'step-sel';
+                        sel.textContent = s.action.selector;
+                        details.appendChild(summary);
+                        details.appendChild(sel);
+                        body.appendChild(details);
+                    }
+                    el.appendChild(body);
+                }
+                group.appendChild(el);
+            }
+
+            sopSteps.appendChild(group);
+        }
     }
 
     /* ── Actions ── */
-    async function beginRecording() {
-        btnStart.textContent = '启动中…';
-        try {
-            try {
-                micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                startVolumeVis(micStream);
-            } catch (e) { console.warn('Volume vis mic failed:', e); }
+    function disableStartButton(msg) {
+        btnStart.disabled = true;
+        btnStart.classList.add('btn-disabled');
+        btnStart.innerHTML = '<span class="bi">⏺</span>' + msg;
+    }
 
+    function enableStartButton() {
+        btnStart.disabled = false;
+        btnStart.classList.remove('btn-disabled');
+        btnStart.innerHTML = '<span class="bi">⏺</span>开始录制';
+    }
+
+    let _starting = false;
+    async function doStart() {
+        if (_starting) return;
+        _starting = true;
+        try {
+            btnStart.disabled = true;
+            btnStart.textContent = '初始化语音识别…';
+
+            // Step 1: Initialize STT — must succeed before recording
+            const sttOk = await initSTT();
+
+            if (!sttOk) {
+                if (sttLastFailure === 'missing-key') {
+                    disableStartButton('请先设置 API Key');
+                    toast('请先在设置里配置 Deepgram API Key');
+                } else if (sttLastFailure === 'mic-denied') {
+                    enableStartButton();
+                    toast('麦克风权限未授予，无法开始录制');
+                    openMicPermissionGuide();
+                } else if (sttLastFailure === 'no-mic-device') {
+                    enableStartButton();
+                    toast('未检测到麦克风设备，无法开始录制');
+                } else if (sttLastFailure === 'mic-unavailable') {
+                    enableStartButton();
+                    toast('麦克风暂不可用（可能被占用），无法开始录制');
+                } else {
+                    enableStartButton();
+                    toast('语音识别初始化失败，无法开始录制');
+                }
+                stopSTT();
+                return;
+            }
+
+            // Step 2: STT ready — get mic for volume visualizer (optional, non-blocking)
+            if (!micStream) {
+                try {
+                    micStream = await getMicStreamForUse();
+                    startVolumeVis(micStream);
+                } catch (e) { /* volume vis not available — not critical */ }
+            }
+
+            // Step 3: Start recording
             const res = await chrome.runtime.sendMessage({ type: 'START_RECORDING' });
             if (res?.success) {
-                startTime = res.startTime; evCount = 0;
-                voiceBox.innerHTML = '<span class="placeholder">连接语音识别…</span>';
+                startTime = res.startTime;
                 evList.innerHTML = '<div class="placeholder">等待操作或说话…</div>';
                 evCountBadge.textContent = '0'; recTimer.textContent = '00:00';
                 switchView('recording');
-                timer = setInterval(() => { recTimer.textContent = fmtTime(Date.now() - startTime); }, 1000);
-                // Start Deepgram with the mic stream
-                if (micStream) {
-                    initDeepgram(micStream);
-                } else {
-                    // Try to get a new stream for Deepgram
-                    try {
-                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                        micStream = stream;
-                        initDeepgram(stream);
-                    } catch (e) { console.warn('Could not get mic for Deepgram:', e); }
-                }
+                timer = setInterval(() => {
+                    if (!isPaused) recTimer.textContent = fmtTime(Date.now() - startTime - pausedDuration);
+                }, 1000);
             }
-        } catch (e) { console.error(e); toast('启动失败'); }
-        btnStart.disabled = false; btnStart.innerHTML = '<span class="bi">⏺</span>开始录制';
-    }
-
-    async function doStart() {
-        btnStart.disabled = true; btnStart.textContent = '请求录音权限…';
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(t => t.stop());
-            await beginRecording();
-        } catch (err) {
-            console.error("Mic permission not available in side panel, opening permission page:", err);
-            toast('🎤 正在打开授权页面…');
-            btnStart.textContent = '等待授权…';
-            chrome.tabs.create({ url: chrome.runtime.getURL('mic-permission.html'), active: true });
+            enableStartButton();
+        } catch (e) {
+            console.error(e);
+            toast('启动失败');
+            enableStartButton();
+        } finally {
+            _starting = false;
         }
     }
-
-    chrome.runtime.onMessage.addListener((msg) => {
-        if (msg.type === 'MIC_PERMISSION_GRANTED' && currentView === 'idle') {
-            toast('✅ 麦克风权限已授予，开始录制！');
-            beginRecording();
-        }
-    });
 
     async function doStop() {
         btnStop.disabled = true; btnStop.textContent = '生成中…';
         clearInterval(timer); timer = null;
-        stopDeepgram();
+        stopSTT();
         stopVolumeVis();
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 420));
         try {
             const res = await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
             if (res?.success && res.sop) { renderSOP(res.sop); switchView('sop'); }
@@ -364,32 +684,47 @@
         const sop = currentSOP;
         let stepsHtml = '';
         let lastUrl = '';
-        sop.steps.forEach(s => {
-            const descHtml = s.action.description.replace(/[「"](.*?)[」"]/g, '<span class="step-act-val">「$1」</span>');
-            let body = '';
-            // Show URL if it changed from previous step
-            const stepUrl = s.action.url || '';
-            if (stepUrl && stepUrl !== lastUrl) {
-                body += `<div class="step-url">🔗 <a href="${stepUrl}" target="_blank" rel="noreferrer noopener">${stepUrl}</a></div>`;
-                lastUrl = stepUrl;
+
+        const segs = sop.segments || [{ type: 'silent', narration: '', steps: sop.steps || [] }];
+
+        for (const seg of segs) {
+            const isVoice = seg.type === 'voice' && seg.narration;
+            stepsHtml += `<div class="sop-segment ${isVoice ? 'sop-seg-voice' : 'sop-seg-silent'}">`;
+            if (isVoice) {
+                stepsHtml += `<div class="seg-narration"><span class="seg-icon">🎙️</span><span class="seg-text">${escapeHtml(seg.narration)}</span>${seg.timeRange ? `<span class="seg-time">${escapeHtml(seg.timeRange)}</span>` : ''}</div>`;
             }
-            if (s.narration && s.narration.trim()) body += `<div class="step-narr">${s.narration}</div>`;
-            if (s.screenshot) body += `<img class="step-img" src="${s.screenshot}" alt="步骤${s.stepNumber}" loading="lazy">`;
-            if (s.action.selector) body += `<details class="step-code-details"><summary class="step-code-summary">元素选择器</summary><div class="step-sel">${s.action.selector}</div></details>`;
-            stepsHtml += `<article class="sop-step"><header class="sop-hdr"><span class="step-n">${s.stepNumber}</span><span class="step-act">${descHtml}</span><span class="step-t">${s.timestamp}</span></header>${body ? `<div class="sop-body">${body}</div>` : ''}</article>`;
-        });
+            for (const s of (seg.steps || [])) {
+                const descHtml = escapeHtml(s.action?.description || s.action?.type || '操作');
+                let body = '';
+                const stepUrl = s.action?.url || '';
+                if (stepUrl && stepUrl !== lastUrl) {
+                    const safeUrl = normalizeExternalUrl(stepUrl);
+                    if (safeUrl) {
+                        body += `<div class="step-url">🔗 <a href="${escapeHtml(safeUrl)}" target="_blank" rel="noreferrer noopener">${escapeHtml(stepUrl)}</a></div>`;
+                    } else {
+                        body += `<div class="step-url">🔗 ${escapeHtml(stepUrl)}</div>`;
+                    }
+                    lastUrl = stepUrl;
+                }
+                const safeImage = normalizeImageSrc(s.screenshot);
+                if (safeImage) body += `<img class="step-img" src="${escapeHtml(safeImage)}" alt="步骤${escapeHtml(s.stepNumber)}" loading="lazy">`;
+                if (s.action?.selector) body += `<details class="step-code-details"><summary class="step-code-summary">执行细节（给 Agent）</summary><div class="step-sel">${escapeHtml(s.action.selector)}</div></details>`;
+                stepsHtml += `<article class="sop-step"><header class="sop-hdr"><span class="step-n">${escapeHtml(s.stepNumber)}</span><span class="step-act">${descHtml}</span><span class="step-t">${escapeHtml(s.timestamp || '')}</span></header>${body ? `<div class="sop-body">${body}</div>` : ''}</article>`;
+            }
+            stepsHtml += `</div>`;
+        }
 
-        const desc = `<section class="doc-desc"><h2>文档说明</h2><p>本文档由 Onvord 浏览器录制工具自动生成，记录了用户在浏览器中的操作流程。</p><p><strong>如何阅读：</strong><br>• 每个步骤包含一个操作描述（如“点击按钮”、“输入文字”、“选择文字”等）<br>• <strong>讲解</strong>：用户在操作时的语音讲解，说明每一步的意图和上下文<br>• <strong>截图</strong>：操作时刻的页面截图，蓝色圆点标记了操作位置<br>• <strong>元素选择器</strong>：被操作元素的 CSS 选择器路径（默认折叠），可用于自动化复现</p><p><strong>信息概要：</strong><br>• 起始页面：${sop.startUrl}<br>• 录制时间：${sop.createdAt}<br>• 共 ${sop.totalSteps} 个操作步骤，总时长 ${fmtTime(sop.duration)}</p></section>`;
+        const desc = `<section class="doc-desc"><h2>文档说明</h2><p>本文档由 Onvord 浏览器录制工具自动生成，记录了用户在浏览器中的操作流程。</p><p><strong>如何阅读：</strong><br>• 每个步骤包含一个操作描述（如“点击按钮”、“输入文字”、“选择文字”等）<br>• <strong>讲解</strong>：用户在操作时的语音讲解，说明每一步的意图和上下文<br>• <strong>截图</strong>：操作时刻的页面截图，蓝色圆点标记了操作位置<br>• <strong>执行细节（给 Agent）</strong>：被操作元素的 CSS 选择器路径（默认折叠），可用于自动化复现</p><p><strong>信息概要：</strong><br>• 起始页面：${escapeHtml(sop.startUrl || '')}<br>• 录制时间：${escapeHtml(sop.createdAt || '')}<br>• 共 ${escapeHtml(sop.totalSteps)} 个操作步骤，总时长 ${escapeHtml(fmtTime(sop.duration || 0))}</p></section>`;
 
-        const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${sop.title}</title><style>:root{--bg:#eef3f8;--surface:#fff;--surface-2:#f7fafc;--line:#d8e2ec;--text:#102a43;--muted:#52667a;--muted-soft:#7b8ea4;--ac:#0b5fff;--ach:#2f80ff;--ac-g:rgba(11,95,255,.2);--r-md:14px;--r-lg:18px;--rf:999px}*{margin:0;padding:0;box-sizing:border-box}body{font-family:\"Public Sans\",\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:var(--text);line-height:1.65;background:radial-gradient(circle at 92% 6%,rgba(11,95,255,.12) 0%,transparent 32%),linear-gradient(180deg,#f8fbff 0%,var(--bg) 100%);padding:24px 16px;-webkit-font-smoothing:antialiased}img{max-width:100%}.shell{max-width:940px;margin:0 auto}.hero{border:1px solid var(--line);background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-radius:var(--r-lg);padding:18px;box-shadow:0 12px 24px rgba(12,27,61,.08);margin-bottom:12px}.hero-kicker{display:inline-flex;align-items:center;border-radius:var(--rf);border:1px solid #c4d3e2;background:#f4f8fd;color:#3c5471;padding:4px 10px;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;margin-bottom:8px}.title{font-family:\"Nunito Sans\",\"Public Sans\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;font-size:30px;font-weight:800;line-height:1.08;letter-spacing:-.02em;color:#123454;margin-bottom:9px}.meta{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--rf);font-size:12px;font-weight:700}.badge-primary{background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff}.badge-soft{background:#eaf1f9;color:#3d5774}.doc-desc{border:1px solid var(--line);background:rgba(255,255,255,.92);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 10px 20px rgba(12,27,61,.07);margin-bottom:12px;font-size:13px;color:var(--muted)}.doc-desc h2{font-size:14px;color:#173453;margin-bottom:8px}.doc-desc p{margin-bottom:8px}.doc-desc p:last-child{margin-bottom:0}.steps{display:flex;flex-direction:column;gap:12px}.sop-step{border:1px solid var(--line);background:#fff;border-radius:var(--r-md);overflow:hidden;box-shadow:0 10px 20px rgba(12,27,61,.07)}.sop-hdr{display:flex;align-items:center;gap:10px;padding:11px 12px;background:#fbfdff;border-bottom:1px solid #e2eaf3}.step-n{width:24px;height:24px;border-radius:var(--rf);display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff;font-size:11px;font-weight:700;flex-shrink:0}.step-act{flex:1;font-size:13px;font-weight:700;color:#1a3a5c}.step-act-val{color:#5f7690;font-weight:500}.step-t{font-size:11px;color:#6e849a;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;white-space:nowrap}.sop-body{padding:10px 12px}.step-url{font-size:12px;color:#6e849a;padding:7px 10px;background:#f7fbff;border-radius:8px;border:1px solid #dbe7f4;margin-bottom:10px;word-break:break-all}.step-url a{color:#0b5fff;text-decoration:none}.step-url a:hover{text-decoration:underline}.step-narr{font-size:13px;line-height:1.6;color:#2f4a66;border-radius:8px;border:1px solid #d2e1f0;border-left:3px solid var(--ac);background:rgba(11,95,255,.05);padding:8px 10px;margin-bottom:10px}.step-narr::before{content:\"讲解：\";font-weight:700;color:#1f3e60}.step-img{width:100%;border-radius:8px;border:1px solid #e0e8f1;margin-bottom:10px}.step-code-details{margin-top:8px}.step-code-summary{cursor:pointer;user-select:none;border:1px solid #d9e4ef;border-radius:8px;background:#f9fcff;color:#4b6784;font-size:12px;font-weight:600;padding:6px 9px}.step-code-summary:hover{border-color:#c4d8ec;background:#fff;color:#2a4a6d}.step-sel{padding:6px 9px;border-radius:0 0 8px 8px;border:1px solid #d9e4ef;border-top:none;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;font-size:11px;color:#5b7390;word-break:break-all;background:#f9fcff}.footer{text-align:center;padding:18px 8px;color:#71859b;font-size:12px}@media (max-width:680px){body{padding:12px}.hero{padding:14px}.title{font-size:24px}.sop-hdr{align-items:flex-start}.step-t{padding-top:3px}}</style></head><body><div class="shell"><section class="hero"><p class="hero-kicker">ONVORD SOP EXPORT</p><h1 class="title">${sop.title}</h1><div class="meta"><span class="badge badge-primary">${sop.totalSteps} 步骤</span><span class="badge badge-soft">${fmtTime(sop.duration)}</span></div></section>${desc}<section class="steps">${stepsHtml}</section><footer class="footer">由 Onvord 录制生成 · ${sop.createdAt}</footer></div></body></html>`;
+        const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(sop.title || 'SOP')}</title><style>:root{--bg:#eef3f8;--surface:#fff;--surface-2:#f7fafc;--line:#d8e2ec;--text:#102a43;--muted:#52667a;--muted-soft:#7b8ea4;--ac:#0b5fff;--ach:#2f80ff;--ac-g:rgba(11,95,255,.2);--r-md:14px;--r-lg:18px;--rf:999px}*{margin:0;padding:0;box-sizing:border-box}body{font-family:\"Public Sans\",\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:var(--text);line-height:1.65;background:radial-gradient(circle at 92% 6%,rgba(11,95,255,.12) 0%,transparent 32%),linear-gradient(180deg,#f8fbff 0%,var(--bg) 100%);padding:24px 16px;-webkit-font-smoothing:antialiased}img{max-width:100%}.shell{max-width:940px;margin:0 auto}.hero{border:1px solid var(--line);background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-radius:var(--r-lg);padding:18px;box-shadow:0 12px 24px rgba(12,27,61,.08);margin-bottom:12px}.hero-kicker{display:inline-flex;align-items:center;border-radius:var(--rf);border:1px solid #c4d3e2;background:#f4f8fd;color:#3c5471;padding:4px 10px;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;margin-bottom:8px}.title{font-family:\"Nunito Sans\",\"Public Sans\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;font-size:30px;font-weight:800;line-height:1.08;letter-spacing:-.02em;color:#123454;margin-bottom:9px}.meta{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--rf);font-size:12px;font-weight:700}.badge-primary{background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff}.badge-soft{background:#eaf1f9;color:#3d5774}.doc-desc{border:1px solid var(--line);background:rgba(255,255,255,.92);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 10px 20px rgba(12,27,61,.07);margin-bottom:12px;font-size:13px;color:var(--muted)}.doc-desc h2{font-size:14px;color:#173453;margin-bottom:8px}.doc-desc p{margin-bottom:8px}.doc-desc p:last-child{margin-bottom:0}.steps{display:flex;flex-direction:column;gap:12px}.sop-step{border:1px solid var(--line);background:#fff;border-radius:var(--r-md);overflow:hidden;box-shadow:0 10px 20px rgba(12,27,61,.07)}.sop-hdr{display:flex;align-items:center;gap:10px;padding:11px 12px;background:#fbfdff;border-bottom:1px solid #e2eaf3}.step-n{width:24px;height:24px;border-radius:var(--rf);display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff;font-size:11px;font-weight:700;flex-shrink:0}.step-act{flex:1;font-size:13px;font-weight:700;color:#1a3a5c}.step-act-val{color:#5f7690;font-weight:500}.step-t{font-size:11px;color:#6e849a;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;white-space:nowrap}.sop-body{padding:10px 12px}.step-url{font-size:12px;color:#6e849a;padding:7px 10px;background:#f7fbff;border-radius:8px;border:1px solid #dbe7f4;margin-bottom:10px;word-break:break-all}.step-url a{color:#0b5fff;text-decoration:none}.step-url a:hover{text-decoration:underline}.step-narr{font-size:13px;line-height:1.6;color:#2f4a66;border-radius:8px;border:1px solid #d2e1f0;border-left:3px solid var(--ac);background:rgba(11,95,255,.05);padding:8px 10px;margin-bottom:10px}.step-narr::before{content:\"讲解：\";font-weight:700;color:#1f3e60}.step-img{width:100%;border-radius:8px;border:1px solid #e0e8f1;margin-bottom:10px}.step-code-details{margin-top:8px}.step-code-summary{cursor:pointer;user-select:none;border:1px solid #d9e4ef;border-radius:8px;background:#f9fcff;color:#4b6784;font-size:12px;font-weight:600;padding:6px 9px}.step-code-summary:hover{border-color:#c4d8ec;background:#fff;color:#2a4a6d}.step-sel{padding:6px 9px;border-radius:0 0 8px 8px;border:1px solid #d9e4ef;border-top:none;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;font-size:11px;color:#5b7390;word-break:break-all;background:#f9fcff}.sop-segment{display:flex;flex-direction:column;gap:10px}.sop-seg-voice{border-left:3px solid var(--ac);padding-left:12px}.sop-seg-silent{border-left:3px solid #d5e2ef;padding-left:12px}.seg-narration{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(11,95,255,.06);border:1px solid rgba(11,95,255,.12);font-size:13px;line-height:1.6;color:#1a3a5c}.seg-icon{flex-shrink:0;font-size:14px}.seg-text{flex:1}.seg-time{flex-shrink:0;font-size:11px;color:#7b8ea4;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace}.footer{text-align:center;padding:18px 8px;color:#71859b;font-size:12px}@media (max-width:680px){body{padding:12px}.hero{padding:14px}.title{font-size:24px}.sop-hdr{align-items:flex-start}.step-t{padding-top:3px}}</style></head><body><div class="shell"><section class="hero"><p class="hero-kicker">ONVORD SOP EXPORT</p><h1 class="title">${escapeHtml(sop.title || 'SOP')}</h1><div class="meta"><span class="badge badge-primary">${escapeHtml(sop.totalSteps)} 步骤</span><span class="badge badge-soft">${escapeHtml(fmtTime(sop.duration || 0))}</span></div></section>${desc}<section class="steps">${stepsHtml}</section><footer class="footer">由 Onvord 录制生成 · ${escapeHtml(sop.createdAt || '')}</footer></div></body></html>`;
 
         const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `${sop.title.replace(/\s+/g, '_')}.html`;
+        a.download = `${safeFilename(sop.title)}.html`;
         a.click();
         URL.revokeObjectURL(a.href);
-        toast('✅ 已导出网页');
+        toast('✅ 已导出 SOP');
     }
 
     /* ── Wire up ── */
@@ -403,18 +738,97 @@
 
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === 'NEW_EVENT' && currentView === 'recording') addActionPill(msg.data);
+        if (msg.type === 'AUTO_STOPPED' && currentView === 'recording') {
+            toast('已达到录制时间上限，自动停止');
+            // Clean up local state without sending another STOP_RECORDING
+            clearInterval(timer); timer = null;
+            stopSTT();
+            stopVolumeVis();
+            if (msg.sop) {
+                renderSOP(msg.sop);
+                switchView('sop');
+            } else {
+                // Fallback: request SOP separately
+                chrome.runtime.sendMessage({ type: 'GET_SOP' }, (res) => {
+                    if (res?.sop) { renderSOP(res.sop); switchView('sop'); }
+                    else { switchView('idle'); }
+                });
+            }
+            btnStop.disabled = false;
+            btnStop.innerHTML = '<span class="bi">⏹</span>停止录制';
+        }
+        if (msg.type === 'RESTRICTED_PAGE') {
+            toast('当前页面操作暂不可录制');
+        }
     });
 
+    /* ── Recovery check on startup ── */
+    chrome.runtime.sendMessage({ type: 'CHECK_RECOVERY' }, (res) => {
+        if (res?.recovery && !res.recovery._dismissed) {
+            const savedAt = new Date(res.recovery.savedAt);
+            const ago = Math.round((Date.now() - res.recovery.savedAt) / 60000);
+            if (ago < 30) {
+                // Show recovery prompt
+                const blockCount = (res.recovery.timeline || []).length;
+                if (blockCount > 0 && confirm(`发现 ${ago} 分钟前的录制数据（${blockCount} 个操作块），是否恢复？`)) {
+                    chrome.runtime.sendMessage({ type: 'RESTORE_RECOVERY', data: res.recovery }, () => {
+                        startTime = res.recovery.startTime;
+                        pausedDuration = res.recovery.pausedDuration || 0;
+                        switchView('recording');
+                        timer = setInterval(() => {
+                            recTimer.textContent = fmtTime(Date.now() - startTime - pausedDuration);
+                        }, 1000);
+                        initSTT().then(ok => {
+                            if (!ok) toast('语音识别恢复失败');
+                        });
+                        getMicStreamForUse().then(stream => {
+                            micStream = stream;
+                            startVolumeVis(stream);
+                        }).catch(() => {});
+                    });
+                } else {
+                    chrome.runtime.sendMessage({ type: 'CLEAR_RECOVERY' });
+                }
+            } else {
+                chrome.runtime.sendMessage({ type: 'CLEAR_RECOVERY' });
+            }
+        }
+    });
+
+    /* ── Startup readiness ── */
+    chrome.storage.local.get(['deepgramKey'], (data) => {
+        if ((data.deepgramKey || '').trim()) enableStartButton();
+        else disableStartButton('请先设置 API Key');
+    });
+
+    /* ── Initial state check ── */
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (res) => {
         if (res?.recording) {
-            startTime = res.startTime; evCount = 0;
+            startTime = res.startTime;
+            pausedDuration = res.pausedDuration || 0;
+            isPaused = res.paused || false;
             switchView('recording');
-            timer = setInterval(() => { recTimer.textContent = fmtTime(Date.now() - startTime); }, 1000);
-            navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            timer = setInterval(() => {
+                if (!isPaused) {
+                    recTimer.textContent = fmtTime(Date.now() - startTime - pausedDuration);
+                }
+            }, 1000);
+            initSTT();
+            getMicStreamForUse().then(stream => {
                 micStream = stream;
                 startVolumeVis(stream);
-                initDeepgram(stream);
-            }).catch(() => { });
+            }).catch(() => {});
+        }
+    });
+
+    /* ── Re-enable button when API key is configured ── */
+    chrome.storage.onChanged.addListener((changes) => {
+        if (currentView !== 'idle' || !changes.deepgramKey) return;
+        const next = String(changes.deepgramKey.newValue || '').trim();
+        if (next) {
+            enableStartButton();
+        } else {
+            disableStartButton('请先设置 API Key');
         }
     });
 })();

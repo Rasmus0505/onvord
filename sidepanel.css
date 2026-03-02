@@ -39,7 +39,7 @@
 body {
   font-family: var(--f-body);
   color: var(--text);
-  min-height: 100vh;
+  height: 100vh;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   background:
@@ -76,13 +76,13 @@ body {
 .panel-shell {
   position: relative;
   z-index: 1;
-  min-height: 100vh;
+  height: 100%;
 }
 
 .view {
   display: none;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100%;
   padding: 14px;
   gap: 12px;
   animation: fadeIn 220ms ease;
@@ -146,9 +146,12 @@ body {
   filter: drop-shadow(0 10px 18px var(--ac-g));
 }
 
-.logo-icon svg {
+.logo-icon svg,
+.logo-icon img {
   width: 100%;
   height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
 }
 
 .logo-text {
@@ -250,6 +253,14 @@ body {
   box-shadow: 0 12px 24px var(--ac-g);
 }
 
+.btn-primary.btn-disabled,
+.btn-primary.btn-disabled:hover {
+  background: #b0c4d8;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
 .btn-danger {
   background: linear-gradient(120deg, #ea5d61, #de3f44);
   color: #ffffff;
@@ -335,11 +346,42 @@ body {
   font-weight: 700;
 }
 
+.rec-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .rec-timer {
   font-family: var(--f-mono);
   font-size: 16px;
   font-weight: 600;
   color: #183859;
+}
+
+.mic-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--rf);
+  background: rgba(31, 157, 104, 0.1);
+  border: 1px solid rgba(31, 157, 104, 0.25);
+  font-size: 12px;
+}
+
+.mic-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.mic-status.error {
+  background: rgba(229, 72, 77, 0.08);
+  border-color: rgba(229, 72, 77, 0.25);
+}
+
+.mic-status.error .mic-icon::after {
+  content: '⚠️';
 }
 
 .section {
@@ -432,6 +474,7 @@ body {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 9px;
+  flex-shrink: 0;
   border: 1px solid #c8dcf3;
   border-left: 3px solid var(--ac);
   background: rgba(11, 95, 255, 0.06);
@@ -456,6 +499,7 @@ body {
   gap: 6px;
   padding: 2px 0;
   animation: slideIn 140ms ease;
+  flex-shrink: 0;
 }
 
 .ev-pill {
@@ -521,6 +565,57 @@ body {
   overflow-y: auto;
 }
 
+/* ── SOP Segments ── */
+.sop-segment {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sop-seg-voice {
+  border-left: 3px solid var(--ac);
+  padding-left: 10px;
+}
+
+.sop-seg-silent {
+  border-left: 3px solid #d5e2ef;
+  padding-left: 10px;
+}
+
+.seg-narration {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(11, 95, 255, 0.06);
+  border: 1px solid rgba(11, 95, 255, 0.12);
+  flex-shrink: 0;
+}
+
+.seg-narr-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.seg-narr-text {
+  flex: 1;
+  font-size: 13px;
+  color: #1a3a5c;
+  line-height: 1.6;
+}
+
+.seg-narr-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted-soft);
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.5;
+  padding-top: 1px;
+}
+
 .sop-steps::-webkit-scrollbar {
   width: 4px;
 }
@@ -537,6 +632,7 @@ body {
   box-shadow: var(--shadow-soft);
   overflow: hidden;
   transition: 160ms ease;
+  flex-shrink: 0;
 }
 
 .sop-step:hover {
@@ -652,6 +748,15 @@ body {
 
 .step-code-details[open] .step-code-summary {
   border-radius: 8px 8px 0 0;
+}
+
+.sop-tip {
+  text-align: center;
+  font-size: 12px;
+  color: #6b8aab;
+  padding: 8px 12px 0;
+  margin: 0;
+  flex-shrink: 0;
 }
 
 .sop-actions {
