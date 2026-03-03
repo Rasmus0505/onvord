@@ -765,7 +765,15 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         // Screenshot capture
         if (action.actionType === 'click' || action.actionType === 'select') {
             captureAndAnnotate(action.clickX, action.clickY, action.viewportW, action.viewportH)
-                .then(s => { if (s) state.screenshots[action.timestamp] = s; });
+                .then(s => {
+                    if (!s) return;
+                    state.screenshots[action.timestamp] = s;
+                    chrome.runtime.sendMessage({
+                        type: 'EVENT_SCREENSHOT',
+                        timestamp: action.timestamp,
+                        screenshot: s
+                    }).catch(() => {});
+                });
         }
 
         // Notify sidepanel

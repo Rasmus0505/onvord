@@ -33,10 +33,10 @@
       <a href="#" id="link-settings" class="settings-link">语音识别设置</a>
     </div>
 
-    <!-- ② 录制中 -->
+    <!-- ② 录制与预览（单页） -->
     <div id="view-recording" class="view">
       <div class="rec-bar">
-        <div class="rec-ind"><span class="rec-dot"></span><span class="rec-label">录制中</span></div>
+        <div class="rec-ind"><span class="rec-dot"></span><span id="rec-label" class="rec-label">录制中</span></div>
         <div class="rec-right">
           <span id="mic-status" class="mic-status" title="语音识别">
             <span class="mic-icon">🎙️</span>
@@ -55,29 +55,21 @@
           <div class="placeholder">等待操作或说话…</div>
         </div>
       </div>
-      <div class="rec-actions">
+      <div id="rec-actions" class="rec-actions">
         <button id="btn-stop" class="btn btn-danger btn-lg"><span class="bi">⏹</span>停止录制</button>
         <button id="btn-pause" class="btn btn-ghost btn-lg"><span class="bi">⏸</span>暂停</button>
       </div>
-    </div>
-
-    <!-- ③ SOP 展示 -->
-    <div id="view-sop" class="view">
-      <div class="sop-head">
-        <h2 id="sop-title" class="sop-title">SOP</h2>
-        <div class="sop-meta">
-          <span id="sop-count" class="badge">0 步骤</span>
-          <span id="sop-dur" class="badge badge-s">00:00</span>
-        </div>
-      </div>
-      <div id="sop-steps" class="sop-steps"></div>
-      <p class="sop-tip">将导出的文件发给 AI，AI 即可学会该操作流程</p>
-      <div class="sop-actions">
-        <button id="btn-export" class="btn btn-primary">导出 SOP</button>
-        <button id="btn-redo" class="btn btn-ghost">重新录制</button>
+      <div id="preview-actions" class="rec-actions hidden">
+        <button id="btn-export" class="btn btn-primary btn-lg">导出 SOP</button>
+        <button id="btn-redo" class="btn btn-ghost btn-lg">重新录制</button>
       </div>
     </div>
   </main>
+
+  <div id="img-viewer" class="img-viewer hidden" aria-hidden="true">
+    <button id="img-viewer-close" class="img-viewer-close" aria-label="关闭预览">✕</button>
+    <img id="img-viewer-img" class="img-viewer-img" alt="截图预览" />
+  </div>
 
   <div id="toast" class="toast"></div>
   <script src="sidepanel.js"></script>

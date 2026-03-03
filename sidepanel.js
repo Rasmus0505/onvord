@@ -14,20 +14,32 @@
 
     /* ── DOM refs ── */
     const $ = id => document.getElementById(id);
-    const views = { idle: $('view-idle'), recording: $('view-recording'), sop: $('view-sop') };
+    const views = { idle: $('view-idle'), recording: $('view-recording') };
     const btnStart = $('btn-start'), btnStop = $('btn-stop');
     const btnPause = $('btn-pause');
     const btnRedo = $('btn-redo');
     const recTimer = $('rec-timer'), voiceBox = $('voice-box');
+    const recBarEl = document.querySelector('#view-recording .rec-bar');
+    const recActionsEl = $('rec-actions');
+    const previewActionsEl = $('preview-actions');
+    const recLabelEl = $('rec-label');
     const evList = $('ev-list'), evCountBadge = $('ev-count');
-    const sopTitle = $('sop-title'), sopCount = $('sop-count'), sopDur = $('sop-dur'), sopSteps = $('sop-steps');
+    const imgViewerEl = $('img-viewer');
+    const imgViewerCloseEl = $('img-viewer-close');
+    const imgViewerImgEl = $('img-viewer-img');
     const toastEl = $('toast');
     const micStatusEl = $('mic-status');
     const volIndicator = $('vol-indicator');
     const volBars = volIndicator ? Array.from(volIndicator.querySelectorAll('.vol-bar')) : [];
 
     /* ── Helpers ── */
-    function switchView(v) { currentView = v; Object.entries(views).forEach(([k, el]) => el.classList.toggle('active', k === v)); }
+    function switchView(v) {
+        currentView = v;
+        Object.entries(views).forEach(([k, el]) => {
+            if (!el) return;
+            el.classList.toggle('active', k === v);
+        });
+    }
     function fmtTime(ms) { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
     function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2000); }
     function normalizeNarrationText(text) {
@@ -226,7 +238,7 @@
             model: 'nova-2',
             language: toDeepgramLanguage(lang),
             smart_format: 'true',
-            interim_results: 'false',
+            interim_results: 'true',
             utterance_end_ms: '3000',
             vad_events: 'true',
             punctuate: 'true',
@@ -544,7 +556,7 @@
             evList.appendChild(interim);
         }
         const span = interim.querySelector('.tl-narr-text');
-        if (span) span.textContent = '┄┄┄';
+        if (span) span.textContent = '识别中';
         evList.scrollTop = evList.scrollHeight;
     }
 
@@ -552,6 +564,79 @@
         // Count top-level timeline groups (narration blocks + action containers) as "big steps"
         const groups = evList.querySelectorAll(':scope > .tl-narration:not(.tl-narration-interim), :scope > .tl-actions');
         evCountBadge.textContent = groups.length;
+    }
+
+    function openImageViewer(src, altText) {
+        if (!imgViewerEl || !imgViewerImgEl || !src) return;
+        imgViewerImgEl.src = src;
+        imgViewerImgEl.alt = altText || '截图预览';
+        imgViewerEl.classList.remove('hidden');
+        imgViewerEl.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeImageViewer() {
+        if (!imgViewerEl || !imgViewerImgEl) return;
+        imgViewerEl.classList.add('hidden');
+        imgViewerEl.setAttribute('aria-hidden', 'true');
+        imgViewerImgEl.removeAttribute('src');
+    }
+
+    function getInlineScreenshotSrc(payload) {
+        return normalizeImageSrc(payload?.screenshot || payload?.screenshot_base64 || '');
+    }
+
+    function setPillText(pill, text) {
+        if (!pill) return;
+        let textEl = pill.querySelector('.ev-pill-text');
+        if (!textEl) {
+            textEl = document.createElement('span');
+            textEl.className = 'ev-pill-text';
+            pill.prepend(textEl);
+        }
+        textEl.textContent = text;
+    }
+
+    function upsertPillThumb(pill, src, altText) {
+        if (!pill) return;
+        const safeImage = normalizeImageSrc(src);
+        let thumbBtn = pill.querySelector('.ev-thumb-btn');
+        if (!safeImage) {
+            if (thumbBtn) thumbBtn.remove();
+            pill.classList.remove('has-thumb');
+            return;
+        }
+        if (!thumbBtn) {
+            thumbBtn = document.createElement('button');
+            thumbBtn.type = 'button';
+            thumbBtn.className = 'ev-thumb-btn';
+            thumbBtn.setAttribute('aria-label', '查看截图');
+
+            const thumb = document.createElement('img');
+            thumb.className = 'ev-thumb';
+            thumb.alt = '';
+            thumb.loading = 'lazy';
+            thumb.decoding = 'async';
+            thumbBtn.appendChild(thumb);
+            pill.appendChild(thumbBtn);
+        }
+        thumbBtn.setAttribute('data-full-src', safeImage);
+        thumbBtn.setAttribute('data-alt', altText || '截图预览');
+        const thumb = thumbBtn.querySelector('.ev-thumb');
+        if (thumb) thumb.src = safeImage;
+        pill.classList.add('has-thumb');
+    }
+
+    function applyScreenshotToTimeline(timestamp, screenshot) {
+        if (timestamp == null) return;
+        const safeImage = normalizeImageSrc(screenshot);
+        if (!safeImage) return;
+        const pills = evList.querySelectorAll(`.ev-pill[data-ts="${String(timestamp)}"]`);
+        if (!pills.length) return;
+        pills.forEach((pill) => {
+            const type = pill.getAttribute('data-type') || '操作';
+            const label = pill.querySelector('.ev-pill-text')?.textContent || type;
+            upsertPillThumb(pill, safeImage, `${type}：${label}`);
+        });
     }
 
     function addActionPill(ev) {
@@ -575,8 +660,12 @@
             if (last && last.classList.contains('tl-actions')) {
                 const lastPill = last.querySelector('.ev-pill[data-type="input"]:last-of-type');
                 if (lastPill) {
-                    lastPill.textContent = `${icon} ${label}`;
+                    lastPill.classList.add('ev-pill-preview');
+                    if (ev.timestamp != null) lastPill.setAttribute('data-ts', String(ev.timestamp));
+                    setPillText(lastPill, `${icon} ${label}`);
                     lastPill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${label}`);
+                    const shot = getInlineScreenshotSrc(ev);
+                    if (shot) upsertPillThumb(lastPill, shot, `${fmtTime(ev.timestamp)} — ${label}`);
                     return; // Updated in place, no new pill needed
                 }
             }
@@ -590,18 +679,25 @@
                 if (tail && tail.classList.contains('ev-pill') && tail.getAttribute('data-type') === 'scroll') {
                     const count = Number(tail.getAttribute('data-count') || '1') + 1;
                     tail.setAttribute('data-count', String(count));
-                    tail.textContent = `${icon} 滚动 x${count}`;
+                    tail.classList.add('ev-pill-preview');
+                    if (ev.timestamp != null) tail.setAttribute('data-ts', String(ev.timestamp));
+                    setPillText(tail, `${icon} 滚动 x${count}`);
                     tail.setAttribute('title', `${fmtTime(ev.timestamp)} — 滚动（合并 ${count} 次）`);
+                    const shot = getInlineScreenshotSrc(ev);
+                    if (shot) upsertPillThumb(tail, shot, `${fmtTime(ev.timestamp)} — 滚动（合并 ${count} 次）`);
                     return;
                 }
             }
         }
 
         const pill = document.createElement('span');
-        pill.className = 'ev-pill';
+        pill.className = 'ev-pill ev-pill-preview';
         pill.setAttribute('data-type', ev.actionType);
+        if (ev.timestamp != null) pill.setAttribute('data-ts', String(ev.timestamp));
         pill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${label}`);
-        pill.textContent = `${icon} ${label}`;
+        setPillText(pill, `${icon} ${label}`);
+        const shot = getInlineScreenshotSrc(ev);
+        if (shot) upsertPillThumb(pill, shot, `${fmtTime(ev.timestamp)} — ${label}`);
 
         const last = getLastTimelineItem();
         if (last && last.classList.contains('tl-actions')) {
@@ -616,14 +712,54 @@
         updateStepCount();
     }
 
-    /* ── SOP rendering (segment-based) ── */
+    /* ── SOP rendering (timeline-based preview) ── */
+    function compactLabel(text, maxLen = 22) {
+        const t = normalizeNarrationText(text);
+        if (!t) return '';
+        return t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
+    }
+
+    function getPreviewActionLabel(step) {
+        const action = step?.action || {};
+        const type = action.type || '';
+        const rawDesc = normalizeNarrationText(action.description || '');
+        if (rawDesc) return compactLabel(rawDesc, 26);
+
+        switch (type) {
+            case 'click': return '点击元素';
+            case 'input': return compactLabel(`输入「${action.value || ''}」`, 22) || '输入';
+            case 'navigate':
+            case 'navigation': return compactLabel(action.page_title || action.url || '页面跳转', 24);
+            case 'scroll': return '滚动';
+            case 'select': return compactLabel(`选择「${action.value || ''}」`, 22) || '选择';
+            case 'keypress': return compactLabel(action.key || action.value || '快捷键', 18);
+            default: return compactLabel(type || '操作', 22);
+        }
+    }
+
+    function createPreviewPill(step) {
+        const action = step?.action || {};
+        const actionType = action.type || 'action';
+        const label = getPreviewActionLabel(step);
+        const icon = evIcon(actionType);
+
+        const pill = document.createElement('span');
+        pill.className = 'ev-pill ev-pill-preview';
+        pill.setAttribute('data-type', actionType);
+        if (step?.timestampMs != null) pill.setAttribute('data-ts', String(step.timestampMs));
+        const ts = step?.timestamp || '';
+        pill.setAttribute('title', `${ts ? `${ts} — ` : ''}${label}`);
+        setPillText(pill, `${icon} ${label}`);
+        const safeImage = normalizeImageSrc(step?.screenshot);
+        if (safeImage) upsertPillThumb(pill, safeImage, `步骤 ${step?.stepNumber || ''} 截图`);
+
+        return pill;
+    }
+
     function renderSOP(sop) {
         currentSOP = sop;
-        sopTitle.textContent = sop.title;
-        const segCount = (sop.segments || []).length || sop.totalSteps;
-        sopCount.textContent = `${segCount} 步骤`;
-        sopDur.textContent = fmtTime(sop.duration);
-        sopSteps.innerHTML = '';
+        clearPlaceholder();
+        evList.innerHTML = '';
 
         const segs = sop.segments || [];
         if (segs.length === 0 && sop.steps) {
@@ -631,86 +767,45 @@
             segs.push({ type: 'silent', narration: '', steps: sop.steps });
         }
 
+        let previewStepCount = 0;
         for (const seg of segs) {
-            const group = document.createElement('div');
-            group.className = seg.type === 'voice' ? 'sop-segment sop-seg-voice' : 'sop-segment sop-seg-silent';
-
-            // Voice segment header: narration + time range
-            if (seg.type === 'voice' && seg.narration) {
+            if (seg.type === 'voice' && isMeaningfulNarration(seg.narration)) {
                 const hdr = document.createElement('div');
-                hdr.className = 'seg-narration';
+                hdr.className = 'tl-narration';
                 const icon = document.createElement('span');
-                icon.className = 'seg-narr-icon';
+                icon.className = 'tl-narr-icon';
                 icon.textContent = '🎙️';
                 const text = document.createElement('span');
-                text.className = 'seg-narr-text';
+                text.className = 'tl-narr-text';
                 text.textContent = seg.narration;
                 hdr.appendChild(icon);
                 hdr.appendChild(text);
                 if (seg.timeRange) {
                     const tm = document.createElement('span');
-                    tm.className = 'seg-narr-time';
+                    tm.className = 'tl-narr-meta';
                     tm.textContent = seg.timeRange;
                     hdr.appendChild(tm);
                 }
-                group.appendChild(hdr);
+                evList.appendChild(hdr);
             }
 
-            // Steps within this segment
-            for (const s of (seg.steps || [])) {
-                const el = document.createElement('div');
-                el.className = 'sop-step';
-
-                const desc = s.action?.description || s.action?.type || '操作';
-                const hdr = document.createElement('div');
-                hdr.className = 'sop-hdr';
-
-                const n = document.createElement('span');
-                n.className = 'step-n';
-                n.textContent = String(s.stepNumber);
-                const act = document.createElement('span');
-                act.className = 'step-act';
-                act.textContent = desc;
-                const t = document.createElement('span');
-                t.className = 'step-t';
-                t.textContent = s.timestamp || '';
-                hdr.appendChild(n);
-                hdr.appendChild(act);
-                hdr.appendChild(t);
-                el.appendChild(hdr);
-
-                const hasBody = Boolean(s.screenshot || s.action?.selector);
-                if (hasBody) {
-                    const body = document.createElement('div');
-                    body.className = 'sop-body';
-                    if (s.screenshot) {
-                        const img = document.createElement('img');
-                        img.className = 'step-img';
-                        img.src = s.screenshot;
-                        img.alt = `步骤${s.stepNumber}`;
-                        img.loading = 'lazy';
-                        body.appendChild(img);
-                    }
-                    if (s.action?.selector) {
-                        const details = document.createElement('details');
-                        details.className = 'step-code-details';
-                        const summary = document.createElement('summary');
-                        summary.className = 'step-code-summary';
-                        summary.textContent = '🔧 执行细节（给 Agent）';
-                        const sel = document.createElement('div');
-                        sel.className = 'step-sel';
-                        sel.textContent = s.action.selector;
-                        details.appendChild(summary);
-                        details.appendChild(sel);
-                        body.appendChild(details);
-                    }
-                    el.appendChild(body);
+            const steps = seg.steps || [];
+            if (steps.length > 0) {
+                const container = document.createElement('div');
+                container.className = 'tl-actions';
+                for (const s of steps) {
+                    container.appendChild(createPreviewPill(s));
+                    previewStepCount += 1;
                 }
-                group.appendChild(el);
+                evList.appendChild(container);
             }
-
-            sopSteps.appendChild(group);
         }
+
+        if (!evList.children.length) {
+            evList.innerHTML = '<div class="placeholder">没有可预览内容</div>';
+        }
+        evCountBadge.textContent = String(previewStepCount || sop.totalSteps || 0);
+        evList.scrollTop = 0;
     }
 
     /* ── Actions ── */
@@ -731,6 +826,23 @@
         btnPause.innerHTML = paused
             ? '<span class="bi">▶</span>继续'
             : '<span class="bi">⏸</span>暂停';
+    }
+
+    function setRecordingLayout(mode) {
+        const isPreview = mode === 'preview';
+        const isPausedState = mode === 'paused';
+        recBarEl?.classList.toggle('done', isPreview);
+        recBarEl?.classList.toggle('paused', isPausedState);
+        if (mode === 'preview') {
+            recActionsEl?.classList.add('hidden');
+            previewActionsEl?.classList.remove('hidden');
+            if (recLabelEl) recLabelEl.textContent = '录制完成';
+            return;
+        }
+        recActionsEl?.classList.remove('hidden');
+        previewActionsEl?.classList.add('hidden');
+        closeImageViewer();
+        if (recLabelEl) recLabelEl.textContent = mode === 'paused' ? '已暂停' : '录制中';
     }
 
     async function refreshStartEligibility() {
@@ -806,11 +918,13 @@
                 startTime = res.startTime;
                 isPaused = false;
                 pausedDuration = 0;
+                currentSOP = null;
                 evList.innerHTML = '<div class="placeholder">等待操作或说话…</div>';
                 evCountBadge.textContent = '0';
                 updateTimerDisplay(0);
                 setPauseButton(false);
                 switchView('recording');
+                setRecordingLayout('live');
                 timer = setInterval(() => {
                     if (!isPaused) updateTimerDisplay(Date.now() - startTime - pausedDuration);
                 }, 1000);
@@ -834,7 +948,11 @@
         await new Promise(r => setTimeout(r, 420));
         try {
             const res = await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
-            if (res?.success && res.sop) { renderSOP(res.sop); switchView('sop'); }
+            if (res?.success && res.sop) {
+                renderSOP(res.sop);
+                switchView('recording');
+                setRecordingLayout('preview');
+            }
             else { toast('生成 SOP 失败'); switchView('idle'); }
         } catch (e) { console.error(e); toast('生成失败'); switchView('idle'); }
         btnStop.disabled = false; btnStop.innerHTML = '<span class="bi">⏹</span>停止录制';
@@ -855,6 +973,7 @@
                 stopSTT({ flushInterim: false });
                 stopVolumeVis();
                 setPauseButton(true);
+                setRecordingLayout('paused');
                 toast('已暂停');
                 return;
             }
@@ -871,6 +990,7 @@
             await chrome.runtime.sendMessage({ type: 'RESUME_RECORDING' });
             isPaused = false;
             setPauseButton(false);
+            setRecordingLayout('live');
             toast('已继续录制');
         } catch (e) {
             console.error(e);
@@ -938,7 +1058,25 @@
     btnStop.addEventListener('click', doStop);
     btnPause?.addEventListener('click', doTogglePause);
     btnExport.addEventListener('click', doExportHTML);
-    btnRedo.addEventListener('click', () => { stopVolumeVis(); switchView('idle'); });
+    btnRedo.addEventListener('click', () => {
+        stopVolumeVis();
+        currentSOP = null;
+        setRecordingLayout('live');
+        switchView('idle');
+    });
+    evList.addEventListener('click', (e) => {
+        const btn = e.target.closest('.ev-thumb-btn');
+        if (!btn) return;
+        e.preventDefault();
+        openImageViewer(btn.getAttribute('data-full-src') || '', btn.getAttribute('data-alt') || '截图预览');
+    });
+    imgViewerCloseEl?.addEventListener('click', closeImageViewer);
+    imgViewerEl?.addEventListener('click', (e) => {
+        if (e.target === imgViewerEl) closeImageViewer();
+    });
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeImageViewer();
+    });
     linkSettings.addEventListener('click', async (e) => {
         e.preventDefault();
         const data = await new Promise(resolve => chrome.storage.local.get(['deepgramKey'], resolve));
@@ -957,6 +1095,9 @@
 
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === 'NEW_EVENT' && currentView === 'recording') addActionPill(msg.data);
+        if (msg.type === 'EVENT_SCREENSHOT' && currentView === 'recording') {
+            applyScreenshotToTimeline(msg.timestamp, msg.screenshot);
+        }
         if (msg.type === 'AUTO_STOPPED' && currentView === 'recording') {
             toast('已达到录制时间上限，自动停止');
             // Clean up local state without sending another STOP_RECORDING
@@ -965,11 +1106,16 @@
             stopVolumeVis();
             if (msg.sop) {
                 renderSOP(msg.sop);
-                switchView('sop');
+                switchView('recording');
+                setRecordingLayout('preview');
             } else {
                 // Fallback: request SOP separately
                 chrome.runtime.sendMessage({ type: 'GET_SOP' }, (res) => {
-                    if (res?.sop) { renderSOP(res.sop); switchView('sop'); }
+                    if (res?.sop) {
+                        renderSOP(res.sop);
+                        switchView('recording');
+                        setRecordingLayout('preview');
+                    }
                     else { switchView('idle'); }
                 });
             }
@@ -1002,6 +1148,7 @@
                         isPaused = false;
                         switchView('recording');
                         setPauseButton(false);
+                        setRecordingLayout('live');
                         timer = setInterval(() => {
                             updateTimerDisplay(Date.now() - startTime - pausedDuration);
                         }, 1000);
@@ -1037,6 +1184,7 @@
             isPaused = res.paused || false;
             switchView('recording');
             setPauseButton(isPaused);
+            setRecordingLayout(isPaused ? 'paused' : 'live');
             timer = setInterval(() => {
                 if (!isPaused) {
                     updateTimerDisplay(Date.now() - startTime - pausedDuration);
