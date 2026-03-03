@@ -507,11 +507,13 @@ function generateSOP() {
 
     // Build segments array
     const segments = [];
+    const usedVoiceSegIdx = new Set();
     let i = 0;
     while (i < actions.length) {
         const segIdx = actionSegMap[i];
         if (segIdx >= 0) {
             const seg = voiceSegs[segIdx];
+            usedVoiceSegIdx.add(segIdx);
             const groupSteps = [];
             while (i < actions.length && actionSegMap[i] === segIdx) {
                 groupSteps.push(makeStep(actions[i]));
@@ -540,8 +542,29 @@ function generateSOP() {
         }
     }
 
-    // Handle case with narrations but no actions
-    if (actions.length === 0 && voiceSegs.length > 0) {
+    // Preserve voice segments that could not be aligned to any action.
+    // Without this, preview/export may show only actions and lose narration blocks.
+    for (let si = 0; si < voiceSegs.length; si++) {
+        if (usedVoiceSegIdx.has(si)) continue;
+        const seg = voiceSegs[si];
+        segments.push({
+            type: 'voice',
+            narration: seg.texts.join(''),
+            timeRange: `${fmtTime(seg.startTime)} - ${fmtTime(seg.endTime)}`,
+            timeRangeMs: { start: seg.startTime, end: seg.endTime },
+            steps: []
+        });
+    }
+
+    // Keep segment order stable by timeline start.
+    segments.sort((a, b) => {
+        const aStart = a.timeRangeMs?.start ?? a.steps?.[0]?.timestampMs ?? Number.MAX_SAFE_INTEGER;
+        const bStart = b.timeRangeMs?.start ?? b.steps?.[0]?.timestampMs ?? Number.MAX_SAFE_INTEGER;
+        return aStart - bStart;
+    });
+
+    // Handle case with narrations but no actions.
+    if (actions.length === 0 && segments.length === 0 && voiceSegs.length > 0) {
         for (const seg of voiceSegs) {
             segments.push({
                 type: 'voice',
