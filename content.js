@@ -321,19 +321,24 @@
 
     // Large scroll (>50% viewport): record immediately
     if (totalDelta > viewportH * 0.5) {
+      const direction = scrollY >= scrollAnchor ? 'down' : 'up';
       pendingScroll = null;
       send({
         actionType: 'scroll',
-        scrollY,
-        scrollDelta: totalDelta,
-        viewportH
+        direction,
+        distance_px: Math.round(totalDelta)
       });
       scrollAnchor = scrollY; // Reset anchor for next segment
       return;
     }
 
     // Small scroll: buffer and send as PENDING_SCROLL after 500ms idle
-    pendingScroll = { scrollY, timestamp: Date.now() - recordingStartTime };
+    pendingScroll = {
+      scrollY,
+      distance_px: Math.round(totalDelta),
+      direction: scrollY >= scrollAnchor ? 'down' : 'up',
+      timestamp: Date.now() - recordingStartTime
+    };
 
     scrollBufferTimer = setTimeout(() => {
       if (pendingScroll) {
@@ -341,7 +346,8 @@
           type: 'PENDING_SCROLL',
           data: {
             actionType: 'scroll',
-            scrollY: pendingScroll.scrollY,
+            direction: pendingScroll.direction,
+            distance_px: pendingScroll.distance_px,
             timestamp: pendingScroll.timestamp,
             url: location.href,
             pageTitle: document.title
@@ -356,7 +362,7 @@
   /* ── Click/Select Debounce ── */
   let lastActionKey = '';
   let lastActionTime = 0;
-  const ACTION_DEBOUNCE_MS = 500;
+  const ACTION_DEBOUNCE_MS = 200;
 
   function isDuplicateAction(key) {
     const now = Date.now();
@@ -460,7 +466,7 @@
       },
       value: val
     });
-  }, 1500);
+  }, 500);
 
   /* ── Keypress Handler ── */
   function onKeyDown(e) {
@@ -484,6 +490,7 @@
     const selectorInfo = getSelectorWithConfidence(t);
     send({
       actionType: 'keypress',
+      key: combo,
       value: combo,
       target: {
         tag: t.tagName.toLowerCase(),
@@ -511,7 +518,7 @@
       listenersAttached = true;
     }
     if (!wasRecording) {
-      send({ actionType: 'navigate', pageTitle: document.title, from_url: document.referrer || null });
+      send({ actionType: 'navigation', pageTitle: document.title, from_url: document.referrer || null });
     }
   }
 

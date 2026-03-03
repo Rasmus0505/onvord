@@ -16,6 +16,7 @@
     const $ = id => document.getElementById(id);
     const views = { idle: $('view-idle'), recording: $('view-recording'), sop: $('view-sop') };
     const btnStart = $('btn-start'), btnStop = $('btn-stop');
+    const btnPause = $('btn-pause');
     const btnRedo = $('btn-redo');
     const recTimer = $('rec-timer'), voiceBox = $('voice-box');
     const evList = $('ev-list'), evCountBadge = $('ev-count');
@@ -76,6 +77,7 @@
 
     let isPaused = false;
     let pausedDuration = 0;
+    const RECORDING_LIMIT_MS = 10 * 60 * 1000;
 
     function evIcon(t) {
         switch (t) {
@@ -87,6 +89,11 @@
             case 'keypress': return '⌨️';
             default: return '⚡';
         }
+    }
+
+    function updateTimerDisplay(elapsedMs) {
+        recTimer.textContent = fmtTime(elapsedMs);
+        recTimer.classList.toggle('warn', (RECORDING_LIMIT_MS - elapsedMs) <= 30000);
     }
 
     /* ── Audio Volume Visualizer ── */
@@ -191,10 +198,10 @@
     function initDeepgram(stream, apiKey, lang, micStatusEl) {
         const params = new URLSearchParams({
             model: 'nova-2',
-            language: lang === 'multi' ? 'multi' : lang,
+            language: lang,
             smart_format: 'true',
-            interim_results: 'true',
-            utterance_end_ms: '1500',
+            interim_results: 'false',
+            utterance_end_ms: '3000',
             vad_events: 'true',
             punctuate: 'true',
         });
@@ -228,6 +235,7 @@
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'SpeechStarted') {
+                    updateListeningPlaceholder();
                     chrome.runtime.sendMessage({
                         type: 'VOICE_STARTED',
                         timestamp: Date.now() - startTime,
@@ -236,6 +244,8 @@
                     return;
                 }
                 if (msg.type === 'UtteranceEnd') {
+                    const interim = evList.querySelector('.tl-narration-interim');
+                    if (interim) interim.remove();
                     chrome.runtime.sendMessage({ type: 'VOICE_ENDED', timestamp: Date.now() - startTime }).catch(() => {});
                     return;
                 }
@@ -252,13 +262,8 @@
                             appendNarrationToTimeline(transcript, ts);
                         }
                     } else {
-                        pendingInterimNarration = transcript;
-                        if (isMeaningfulNarration(transcript)) {
-                            updateInterimNarration(transcript);
-                        } else {
-                            const interim = evList.querySelector('.tl-narration-interim');
-                            if (interim) interim.remove();
-                        }
+                        // "说完再现"：录制中只显示正在聆听占位，不展示 partial 文本。
+                        pendingInterimNarration = '';
                     }
                 }
             } catch (e) { /* ignore */ }
@@ -297,6 +302,8 @@
 
     function stopSTT(options = {}) {
         const { flushInterim = true } = options;
+        const interim = evList.querySelector('.tl-narration-interim');
+        if (interim) interim.remove();
         if (flushInterim) {
             flushPendingInterimNarration();
         } else {
@@ -335,7 +342,10 @@
         const data = await new Promise(resolve => {
             chrome.storage.local.get(['deepgramKey', 'deepgramLang'], resolve);
         });
-        const lang = data.deepgramLang || 'zh';
+        const savedLang = String(data.deepgramLang || '');
+        const lang = savedLang === 'zh' ? 'zh-CN'
+            : savedLang === 'en' ? 'en-US'
+                : (savedLang === 'en-US' || savedLang === 'zh-CN' ? savedLang : 'zh-CN');
         const apiKey = (data.deepgramKey || '').trim();
 
         if (!apiKey) {
@@ -457,6 +467,26 @@
         evList.scrollTop = evList.scrollHeight;
     }
 
+    function updateListeningPlaceholder() {
+        clearPlaceholder();
+        let interim = evList.querySelector('.tl-narration-interim');
+        if (!interim) {
+            interim = document.createElement('div');
+            interim.className = 'tl-narration tl-narration-interim';
+            const icon = document.createElement('span');
+            icon.className = 'tl-narr-icon';
+            icon.textContent = '🎙️';
+            const span = document.createElement('span');
+            span.className = 'tl-narr-text voice-interim';
+            interim.appendChild(icon);
+            interim.appendChild(span);
+            evList.appendChild(interim);
+        }
+        const span = interim.querySelector('.tl-narr-text');
+        if (span) span.textContent = '┄┄┄';
+        evList.scrollTop = evList.scrollHeight;
+    }
+
     function updateStepCount() {
         // Count top-level timeline groups (narration blocks + action containers) as "big steps"
         const groups = evList.querySelectorAll(':scope > .tl-narration:not(.tl-narration-interim), :scope > .tl-actions');
@@ -474,7 +504,7 @@
             case 'navigate': case 'navigation': label = ev.pageTitle || '页面'; break;
             case 'scroll': label = '滚动'; break;
             case 'select': label = `选择「${(ev.value || '').substring(0, 15)}」`; break;
-            case 'keypress': label = ev.value || '快捷键'; break;
+            case 'keypress': label = ev.key || ev.value || '快捷键'; break;
             default: label = ev.actionType;
         }
 
@@ -635,6 +665,33 @@
         btnStart.innerHTML = '<span class="bi">⏺</span>开始录制';
     }
 
+    function setPauseButton(paused) {
+        if (!btnPause) return;
+        btnPause.innerHTML = paused
+            ? '<span class="bi">▶</span>继续'
+            : '<span class="bi">⏸</span>暂停';
+    }
+
+    async function refreshStartEligibility() {
+        if (currentView !== 'idle') return;
+        const data = await new Promise(resolve => chrome.storage.local.get(['deepgramKey'], resolve));
+        const apiKey = String(data.deepgramKey || '').trim();
+        if (!apiKey) {
+            disableStartButton('请先设置 API Key');
+            return;
+        }
+        let micPermissionState = 'unknown';
+        try {
+            const res = await navigator.permissions.query({ name: 'microphone' });
+            micPermissionState = res.state;
+        } catch { /* noop */ }
+        if (micPermissionState !== 'granted') {
+            disableStartButton('请先授权麦克风');
+            return;
+        }
+        enableStartButton();
+    }
+
     let _starting = false;
     async function doStart() {
         if (_starting) return;
@@ -680,11 +737,15 @@
             const res = await chrome.runtime.sendMessage({ type: 'START_RECORDING' });
             if (res?.success) {
                 startTime = res.startTime;
+                isPaused = false;
+                pausedDuration = 0;
                 evList.innerHTML = '<div class="placeholder">等待操作或说话…</div>';
-                evCountBadge.textContent = '0'; recTimer.textContent = '00:00';
+                evCountBadge.textContent = '0';
+                updateTimerDisplay(0);
+                setPauseButton(false);
                 switchView('recording');
                 timer = setInterval(() => {
-                    if (!isPaused) recTimer.textContent = fmtTime(Date.now() - startTime - pausedDuration);
+                    if (!isPaused) updateTimerDisplay(Date.now() - startTime - pausedDuration);
                 }, 1000);
             }
             enableStartButton();
@@ -699,6 +760,7 @@
 
     async function doStop() {
         btnStop.disabled = true; btnStop.textContent = '生成中…';
+        if (btnPause) btnPause.disabled = true;
         clearInterval(timer); timer = null;
         stopSTT();
         stopVolumeVis();
@@ -709,6 +771,46 @@
             else { toast('生成 SOP 失败'); switchView('idle'); }
         } catch (e) { console.error(e); toast('生成失败'); switchView('idle'); }
         btnStop.disabled = false; btnStop.innerHTML = '<span class="bi">⏹</span>停止录制';
+        if (btnPause) {
+            btnPause.disabled = false;
+            setPauseButton(false);
+        }
+        isPaused = false;
+    }
+
+    async function doTogglePause() {
+        if (currentView !== 'recording' || !btnPause) return;
+        btnPause.disabled = true;
+        try {
+            if (!isPaused) {
+                await chrome.runtime.sendMessage({ type: 'PAUSE_RECORDING' });
+                isPaused = true;
+                stopSTT({ flushInterim: false });
+                stopVolumeVis();
+                setPauseButton(true);
+                toast('已暂停');
+                return;
+            }
+
+            const sttOk = await initSTT();
+            if (!sttOk) {
+                toast('恢复语音识别失败，请检查麦克风和 API Key');
+                return;
+            }
+            try {
+                micStream = await getMicStreamForUse();
+                startVolumeVis(micStream);
+            } catch { /* non-blocking */ }
+            await chrome.runtime.sendMessage({ type: 'RESUME_RECORDING' });
+            isPaused = false;
+            setPauseButton(false);
+            toast('已继续录制');
+        } catch (e) {
+            console.error(e);
+            toast('暂停/继续失败');
+        } finally {
+            btnPause.disabled = false;
+        }
     }
 
     function doExportHTML() {
@@ -748,7 +850,10 @@
 
         const desc = `<section class="doc-desc"><h2>文档说明</h2><p>本文档由 Onvord 浏览器录制工具自动生成，记录了用户在浏览器中的操作流程。</p><p><strong>如何阅读：</strong><br>• 每个步骤包含一个操作描述（如“点击按钮”、“输入文字”、“选择文字”等）<br>• <strong>讲解</strong>：用户在操作时的语音讲解，说明每一步的意图和上下文<br>• <strong>截图</strong>：操作时刻的页面截图，蓝色圆点标记了操作位置<br>• <strong>执行细节（给 Agent）</strong>：被操作元素的 CSS 选择器路径（默认折叠），可用于自动化复现</p><p><strong>信息概要：</strong><br>• 起始页面：${escapeHtml(sop.startUrl || '')}<br>• 录制时间：${escapeHtml(sop.createdAt || '')}<br>• 共 ${escapeHtml(sop.totalSteps)} 个操作步骤，总时长 ${escapeHtml(fmtTime(sop.duration || 0))}</p></section>`;
 
-        const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(sop.title || 'SOP')}</title><style>:root{--bg:#eef3f8;--surface:#fff;--surface-2:#f7fafc;--line:#d8e2ec;--text:#102a43;--muted:#52667a;--muted-soft:#7b8ea4;--ac:#0b5fff;--ach:#2f80ff;--ac-g:rgba(11,95,255,.2);--r-md:14px;--r-lg:18px;--rf:999px}*{margin:0;padding:0;box-sizing:border-box}body{font-family:\"Public Sans\",\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:var(--text);line-height:1.65;background:radial-gradient(circle at 92% 6%,rgba(11,95,255,.12) 0%,transparent 32%),linear-gradient(180deg,#f8fbff 0%,var(--bg) 100%);padding:24px 16px;-webkit-font-smoothing:antialiased}img{max-width:100%}.shell{max-width:940px;margin:0 auto}.hero{border:1px solid var(--line);background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-radius:var(--r-lg);padding:18px;box-shadow:0 12px 24px rgba(12,27,61,.08);margin-bottom:12px}.hero-kicker{display:inline-flex;align-items:center;border-radius:var(--rf);border:1px solid #c4d3e2;background:#f4f8fd;color:#3c5471;padding:4px 10px;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;margin-bottom:8px}.title{font-family:\"Nunito Sans\",\"Public Sans\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;font-size:30px;font-weight:800;line-height:1.08;letter-spacing:-.02em;color:#123454;margin-bottom:9px}.meta{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--rf);font-size:12px;font-weight:700}.badge-primary{background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff}.badge-soft{background:#eaf1f9;color:#3d5774}.doc-desc{border:1px solid var(--line);background:rgba(255,255,255,.92);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 10px 20px rgba(12,27,61,.07);margin-bottom:12px;font-size:13px;color:var(--muted)}.doc-desc h2{font-size:14px;color:#173453;margin-bottom:8px}.doc-desc p{margin-bottom:8px}.doc-desc p:last-child{margin-bottom:0}.steps{display:flex;flex-direction:column;gap:12px}.sop-step{border:1px solid var(--line);background:#fff;border-radius:var(--r-md);overflow:hidden;box-shadow:0 10px 20px rgba(12,27,61,.07)}.sop-hdr{display:flex;align-items:center;gap:10px;padding:11px 12px;background:#fbfdff;border-bottom:1px solid #e2eaf3}.step-n{width:24px;height:24px;border-radius:var(--rf);display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff;font-size:11px;font-weight:700;flex-shrink:0}.step-act{flex:1;font-size:13px;font-weight:700;color:#1a3a5c}.step-act-val{color:#5f7690;font-weight:500}.step-t{font-size:11px;color:#6e849a;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;white-space:nowrap}.sop-body{padding:10px 12px}.step-url{font-size:12px;color:#6e849a;padding:7px 10px;background:#f7fbff;border-radius:8px;border:1px solid #dbe7f4;margin-bottom:10px;word-break:break-all}.step-url a{color:#0b5fff;text-decoration:none}.step-url a:hover{text-decoration:underline}.step-narr{font-size:13px;line-height:1.6;color:#2f4a66;border-radius:8px;border:1px solid #d2e1f0;border-left:3px solid var(--ac);background:rgba(11,95,255,.05);padding:8px 10px;margin-bottom:10px}.step-narr::before{content:\"讲解：\";font-weight:700;color:#1f3e60}.step-img{width:100%;border-radius:8px;border:1px solid #e0e8f1;margin-bottom:10px}.step-code-details{margin-top:8px}.step-code-summary{cursor:pointer;user-select:none;border:1px solid #d9e4ef;border-radius:8px;background:#f9fcff;color:#4b6784;font-size:12px;font-weight:600;padding:6px 9px}.step-code-summary:hover{border-color:#c4d8ec;background:#fff;color:#2a4a6d}.step-sel{padding:6px 9px;border-radius:0 0 8px 8px;border:1px solid #d9e4ef;border-top:none;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;font-size:11px;color:#5b7390;word-break:break-all;background:#f9fcff}.sop-segment{display:flex;flex-direction:column;gap:10px}.sop-seg-voice{border-left:3px solid var(--ac);padding-left:12px}.sop-seg-silent{border-left:3px solid #d5e2ef;padding-left:12px}.seg-narration{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(11,95,255,.06);border:1px solid rgba(11,95,255,.12);font-size:13px;line-height:1.6;color:#1a3a5c}.seg-icon{flex-shrink:0;font-size:14px}.seg-text{flex:1}.seg-time{flex-shrink:0;font-size:11px;color:#7b8ea4;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace}.footer{text-align:center;padding:18px 8px;color:#71859b;font-size:12px}@media (max-width:680px){body{padding:12px}.hero{padding:14px}.title{font-size:24px}.sop-hdr{align-items:flex-start}.step-t{padding-top:3px}}</style></head><body><div class="shell"><section class="hero"><p class="hero-kicker">ONVORD SOP EXPORT</p><h1 class="title">${escapeHtml(sop.title || 'SOP')}</h1><div class="meta"><span class="badge badge-primary">${escapeHtml(sop.totalSteps)} 步骤</span><span class="badge badge-soft">${escapeHtml(fmtTime(sop.duration || 0))}</span></div></section>${desc}<section class="steps">${stepsHtml}</section><footer class="footer">由 Onvord 录制生成 · ${escapeHtml(sop.createdAt || '')}</footer></div></body></html>`;
+        const sopJson = JSON.stringify(sop)
+            .replace(/</g, '\\u003c')
+            .replace(/-->/g, '--\\u003e');
+        const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(sop.title || 'SOP')}</title><style>:root{--bg:#eef3f8;--surface:#fff;--surface-2:#f7fafc;--line:#d8e2ec;--text:#102a43;--muted:#52667a;--muted-soft:#7b8ea4;--ac:#0b5fff;--ach:#2f80ff;--ac-g:rgba(11,95,255,.2);--r-md:14px;--r-lg:18px;--rf:999px}*{margin:0;padding:0;box-sizing:border-box}body{font-family:\"Public Sans\",\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:var(--text);line-height:1.65;background:radial-gradient(circle at 92% 6%,rgba(11,95,255,.12) 0%,transparent 32%),linear-gradient(180deg,#f8fbff 0%,var(--bg) 100%);padding:24px 16px;-webkit-font-smoothing:antialiased}img{max-width:100%}.shell{max-width:940px;margin:0 auto}.hero{border:1px solid var(--line);background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-radius:var(--r-lg);padding:18px;box-shadow:0 12px 24px rgba(12,27,61,.08);margin-bottom:12px}.hero-kicker{display:inline-flex;align-items:center;border-radius:var(--rf);border:1px solid #c4d3e2;background:#f4f8fd;color:#3c5471;padding:4px 10px;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;margin-bottom:8px}.title{font-family:\"Nunito Sans\",\"Public Sans\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;font-size:30px;font-weight:800;line-height:1.08;letter-spacing:-.02em;color:#123454;margin-bottom:9px}.meta{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--rf);font-size:12px;font-weight:700}.badge-primary{background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff}.badge-soft{background:#eaf1f9;color:#3d5774}.doc-desc{border:1px solid var(--line);background:rgba(255,255,255,.92);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 10px 20px rgba(12,27,61,.07);margin-bottom:12px;font-size:13px;color:var(--muted)}.doc-desc h2{font-size:14px;color:#173453;margin-bottom:8px}.doc-desc p{margin-bottom:8px}.doc-desc p:last-child{margin-bottom:0}.steps{display:flex;flex-direction:column;gap:12px}.sop-step{border:1px solid var(--line);background:#fff;border-radius:var(--r-md);overflow:hidden;box-shadow:0 10px 20px rgba(12,27,61,.07)}.sop-hdr{display:flex;align-items:center;gap:10px;padding:11px 12px;background:#fbfdff;border-bottom:1px solid #e2eaf3}.step-n{width:24px;height:24px;border-radius:var(--rf);display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff;font-size:11px;font-weight:700;flex-shrink:0}.step-act{flex:1;font-size:13px;font-weight:700;color:#1a3a5c}.step-act-val{color:#5f7690;font-weight:500}.step-t{font-size:11px;color:#6e849a;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;white-space:nowrap}.sop-body{padding:10px 12px}.step-url{font-size:12px;color:#6e849a;padding:7px 10px;background:#f7fbff;border-radius:8px;border:1px solid #dbe7f4;margin-bottom:10px;word-break:break-all}.step-url a{color:#0b5fff;text-decoration:none}.step-url a:hover{text-decoration:underline}.step-narr{font-size:13px;line-height:1.6;color:#2f4a66;border-radius:8px;border:1px solid #d2e1f0;border-left:3px solid var(--ac);background:rgba(11,95,255,.05);padding:8px 10px;margin-bottom:10px}.step-narr::before{content:\"讲解：\";font-weight:700;color:#1f3e60}.step-img{width:100%;border-radius:8px;border:1px solid #e0e8f1;margin-bottom:10px}.step-code-details{margin-top:8px}.step-code-summary{cursor:pointer;user-select:none;border:1px solid #d9e4ef;border-radius:8px;background:#f9fcff;color:#4b6784;font-size:12px;font-weight:600;padding:6px 9px}.step-code-summary:hover{border-color:#c4d8ec;background:#fff;color:#2a4a6d}.step-sel{padding:6px 9px;border-radius:0 0 8px 8px;border:1px solid #d9e4ef;border-top:none;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;font-size:11px;color:#5b7390;word-break:break-all;background:#f9fcff}.sop-segment{display:flex;flex-direction:column;gap:10px}.sop-seg-voice{border-left:3px solid var(--ac);padding-left:12px}.sop-seg-silent{border-left:3px solid #d5e2ef;padding-left:12px}.seg-narration{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(11,95,255,.06);border:1px solid rgba(11,95,255,.12);font-size:13px;line-height:1.6;color:#1a3a5c}.seg-icon{flex-shrink:0;font-size:14px}.seg-text{flex:1}.seg-time{flex-shrink:0;font-size:11px;color:#7b8ea4;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace}.footer{text-align:center;padding:18px 8px;color:#71859b;font-size:12px}@media (max-width:680px){body{padding:12px}.hero{padding:14px}.title{font-size:24px}.sop-hdr{align-items:flex-start}.step-t{padding-top:3px}}</style></head><body><div class="shell"><section class="hero"><p class="hero-kicker">ONVORD SOP EXPORT</p><h1 class="title">${escapeHtml(sop.title || 'SOP')}</h1><div class="meta"><span class="badge badge-primary">${escapeHtml(sop.totalSteps)} 步骤</span><span class="badge badge-soft">${escapeHtml(fmtTime(sop.duration || 0))}</span></div></section>${desc}<section class="steps">${stepsHtml}</section><footer class="footer">由 Onvord 录制生成 · ${escapeHtml(sop.createdAt || '')}</footer></div><script id="onvord-sop-json" type="application/json">${sopJson}</script></body></html>`;
 
         const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
         const a = document.createElement('a');
@@ -764,9 +869,24 @@
     const linkSettings = $('link-settings');
     btnStart.addEventListener('click', doStart);
     btnStop.addEventListener('click', doStop);
+    btnPause?.addEventListener('click', doTogglePause);
     btnExport.addEventListener('click', doExportHTML);
     btnRedo.addEventListener('click', () => { stopVolumeVis(); switchView('idle'); });
-    linkSettings.addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
+    linkSettings.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const data = await new Promise(resolve => chrome.storage.local.get(['deepgramKey'], resolve));
+        const hasKey = Boolean(String(data.deepgramKey || '').trim());
+        let micPermissionState = 'unknown';
+        try {
+            const res = await navigator.permissions.query({ name: 'microphone' });
+            micPermissionState = res.state;
+        } catch { /* noop */ }
+        if (hasKey && micPermissionState !== 'granted') {
+            openMicPermissionGuide();
+            return;
+        }
+        chrome.runtime.openOptionsPage();
+    });
 
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === 'NEW_EVENT' && currentView === 'recording') addActionPill(msg.data);
@@ -788,9 +908,15 @@
             }
             btnStop.disabled = false;
             btnStop.innerHTML = '<span class="bi">⏹</span>停止录制';
+            setPauseButton(false);
+            if (btnPause) btnPause.disabled = false;
+            isPaused = false;
         }
         if (msg.type === 'RESTRICTED_PAGE') {
             toast('当前页面操作暂不可录制');
+        }
+        if (msg.type === 'MIC_PERMISSION_GRANTED') {
+            refreshStartEligibility();
         }
     });
 
@@ -806,9 +932,11 @@
                     chrome.runtime.sendMessage({ type: 'RESTORE_RECOVERY', data: res.recovery }, () => {
                         startTime = res.recovery.startTime;
                         pausedDuration = res.recovery.pausedDuration || 0;
+                        isPaused = false;
                         switchView('recording');
+                        setPauseButton(false);
                         timer = setInterval(() => {
-                            recTimer.textContent = fmtTime(Date.now() - startTime - pausedDuration);
+                            updateTimerDisplay(Date.now() - startTime - pausedDuration);
                         }, 1000);
                         initSTT().then(ok => {
                             if (!ok) toast('语音识别恢复失败');
@@ -828,10 +956,11 @@
     });
 
     /* ── Startup readiness ── */
-    chrome.storage.local.get(['deepgramKey'], (data) => {
-        if ((data.deepgramKey || '').trim()) enableStartButton();
-        else disableStartButton('请先设置 API Key');
+    refreshStartEligibility();
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') refreshStartEligibility();
     });
+    window.addEventListener('focus', () => refreshStartEligibility());
 
     /* ── Initial state check ── */
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (res) => {
@@ -840,9 +969,10 @@
             pausedDuration = res.pausedDuration || 0;
             isPaused = res.paused || false;
             switchView('recording');
+            setPauseButton(isPaused);
             timer = setInterval(() => {
                 if (!isPaused) {
-                    recTimer.textContent = fmtTime(Date.now() - startTime - pausedDuration);
+                    updateTimerDisplay(Date.now() - startTime - pausedDuration);
                 }
             }, 1000);
             initSTT();
@@ -853,14 +983,9 @@
         }
     });
 
-    /* ── Re-enable button when API key is configured ── */
+    /* ── Re-check start eligibility when key changes ── */
     chrome.storage.onChanged.addListener((changes) => {
         if (currentView !== 'idle' || !changes.deepgramKey) return;
-        const next = String(changes.deepgramKey.newValue || '').trim();
-        if (next) {
-            enableStartButton();
-        } else {
-            disableStartButton('请先设置 API Key');
-        }
+        refreshStartEligibility();
     });
 })();

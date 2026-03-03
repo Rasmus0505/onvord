@@ -3,7 +3,7 @@
 /* ── Constants ── */
 const VOICE_DELAY_WINDOW = 2000;   // ms: actions within this window after voice ends still belong to current block
 const SILENT_SPLIT_GAP = 3000;     // ms: gap between actions to split into new silent block
-const AUTO_STOP_DURATION = 1800000; // ms: 30 minutes
+const AUTO_STOP_DURATION = 600000; // ms: 10 minutes
 const RECOVERY_INTERVAL = 30000;   // ms: 30 seconds
 const SCROLL_PROMOTE_WINDOW = 500; // ms: pending scroll promotion window
 
@@ -15,7 +15,7 @@ let state = {
     pausedDuration: 0,
     pauseStartTime: 0,
     startUrl: '',
-    language: 'zh',
+    language: 'zh-CN',
 
     // Block-based timeline
     timeline: [],        // finalized blocks
@@ -263,6 +263,11 @@ async function startRecording() {
     // Load language setting
     const data = await new Promise(r => chrome.storage.local.get(['deepgramLang'], r));
 
+    const rawLang = String(data.deepgramLang || '');
+    const language = rawLang === 'zh' ? 'zh-CN'
+        : rawLang === 'en' ? 'en-US'
+            : (rawLang === 'zh-CN' || rawLang === 'en-US' ? rawLang : 'zh-CN');
+
     state = {
         recording: true,
         paused: false,
@@ -270,7 +275,7 @@ async function startRecording() {
         pausedDuration: 0,
         pauseStartTime: 0,
         startUrl: activeTab?.url || '',
-        language: data.deepgramLang || 'zh',
+        language,
         timeline: [],
         currentBlock: null,
         voiceActive: false,
@@ -399,14 +404,16 @@ function fmtTime(ms) {
 }
 
 function actionDesc(ev) {
+    const direction = ev.direction === 'up' ? '向上' : '向下';
+    const distance = Number(ev.distance_px || ev.scrollDelta || 0);
     switch (ev.actionType) {
         case 'click': return `点击 ${ev.target?.description || '元素'}`;
         case 'input': return `在 ${ev.target?.description || '输入框'} 中输入 "${(ev.value || '').substring(0, 40)}"`;
         case 'navigate':
         case 'navigation': return `导航到 ${ev.pageTitle || ev.url}`;
         case 'select': return `选择文字「${(ev.value || '').substring(0, 40)}」`;
-        case 'keypress': return `按下 ${ev.value || '快捷键'}`;
-        case 'scroll': return '页面滚动';
+        case 'keypress': return `按下 ${ev.key || ev.value || '快捷键'}`;
+        case 'scroll': return `页面${direction}滚动 ${distance}px`;
         default: return ev.actionType;
     }
 }
@@ -430,8 +437,8 @@ function generateSOP() {
         }
     }
 
-    // Filter out scroll events, sort by timestamp
-    const actions = allActions.filter(e => e.actionType !== 'scroll').sort((a, b) => a.timestamp - b.timestamp);
+    // Keep all action types, including meaningful scrolls promoted from pending buffer.
+    const actions = allActions.sort((a, b) => a.timestamp - b.timestamp);
 
     // ── Build voice segments from narration events ──
     // Narration events are the source of truth; VOICE_STARTED/VOICE_ENDED are best-effort hints.
@@ -471,24 +478,33 @@ function generateSOP() {
 
     // Build step objects
     let stepNum = 0;
-    const makeStep = (ev) => ({
+    const makeStep = (ev) => {
+        const normalizedType = ev.actionType === 'navigate' ? 'navigation' : ev.actionType;
+        const screenshot = state.screenshots[ev.timestamp] || null;
+        return ({
         stepNumber: ++stepNum,
         timestamp: fmtTime(ev.timestamp),
         timestampMs: ev.timestamp,
         action: {
-            type: ev.actionType,
+            type: normalizedType,
             description: actionDesc(ev),
             target: ev.target || null,
             selector: ev.target?.selector || '',
             xpath: ev.target?.xpath || '',
             selector_confidence: ev.target?.selector_confidence || 'low',
             url: ev.url,
+            from_url: ev.from_url || null,
             pageTitle: ev.pageTitle,
-            value: ev.value || null
+            value: ev.value || null,
+            key: ev.key || ev.value || null,
+            direction: ev.direction || null,
+            distance_px: Number(ev.distance_px || ev.scrollDelta || 0) || null,
+            screenshot_base64: (normalizedType === 'click' || normalizedType === 'select') ? screenshot : null
         },
-        screenshot: state.screenshots[ev.timestamp] || null,
+        screenshot,
         narration: ''
     });
+    };
 
     // Assign each action to a voice segment (±BUFFER)
     const BUFFER = 3000;
@@ -731,7 +747,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const action = msg.data;
 
         // Promote any pending scrolls that happened near this action
-        if (action.actionType === 'click' || action.actionType === 'input' || action.actionType === 'keypress') {
+        if (action.actionType === 'click' || action.actionType === 'input') {
             const promoted = promotePendingScrolls(action.timestamp);
             for (const ps of promoted) {
                 addActionToCurrentBlock(ps);
@@ -750,8 +766,6 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         if (action.actionType === 'click' || action.actionType === 'select') {
             captureAndAnnotate(action.clickX, action.clickY, action.viewportW, action.viewportH)
                 .then(s => { if (s) state.screenshots[action.timestamp] = s; });
-        } else if (action.actionType === 'navigate' || action.actionType === 'navigation') {
-            capture().then(s => { if (s) state.screenshots[action.timestamp] = s; });
         }
 
         // Notify sidepanel

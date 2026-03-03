@@ -8,11 +8,16 @@
     const btnTest = document.getElementById('btn-test');
     const toggleVis = document.getElementById('toggle-vis');
     const statusEl = document.getElementById('status');
+    const normalizeLang = (lang) => {
+        if (lang === 'zh') return 'zh-CN';
+        if (lang === 'en') return 'en-US';
+        return (lang === 'zh-CN' || lang === 'en-US') ? lang : 'zh-CN';
+    };
 
     // Load saved settings
     chrome.storage.local.get(['deepgramKey', 'deepgramLang'], (data) => {
         if (data.deepgramKey) keyInput.value = data.deepgramKey;
-        if (data.deepgramLang) langSelect.value = data.deepgramLang;
+        langSelect.value = normalizeLang(data.deepgramLang);
     });
 
     // Toggle password visibility
@@ -37,7 +42,7 @@
     // Save settings
     btnSave.addEventListener('click', () => {
         const key = keyInput.value.trim();
-        const lang = langSelect.value;
+        const lang = normalizeLang(langSelect.value);
 
         const data = { deepgramLang: lang };
         if (key) data.deepgramKey = key;
