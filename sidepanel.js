@@ -195,9 +195,9 @@
     }
 
     function toDeepgramLanguage(lang) {
-        if (lang === 'zh-CN' || lang === 'zh') return 'zh';
-        if (lang === 'en-US' || lang === 'en') return 'en';
-        return 'zh';
+        if (lang === 'zh' || lang === 'zh-CN') return 'zh-CN';
+        if (lang === 'en' || lang === 'en-US') return 'en-US';
+        return 'zh-CN';
     }
 
     async function probeDeepgram(apiKey) {
@@ -326,7 +326,7 @@
             dgSocket.onclose = (e) => {
                 console.log('Deepgram WS closed:', e.code, e.reason);
                 if (!opened) {
-                    finish(false, 'deepgram-ws-close');
+                    finish(false, `deepgram-ws-close-${e.code || 'unknown'}`);
                     return;
                 }
                 if (currentView === 'recording' && e.code !== 1000) {
