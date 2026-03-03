@@ -200,8 +200,28 @@
         return 'zh';
     }
 
+    async function probeDeepgram(apiKey) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 6000);
+        try {
+            const res = await fetch('https://api.deepgram.com/v1/projects', {
+                method: 'GET',
+                headers: { Authorization: `Token ${apiKey}` },
+                signal: ctrl.signal
+            });
+            if (res.ok) return { ok: true, reason: 'ok' };
+            if (res.status === 401 || res.status === 403) return { ok: false, reason: 'deepgram-key-invalid', status: res.status };
+            return { ok: false, reason: 'deepgram-server', status: res.status };
+        } catch (e) {
+            if (e?.name === 'AbortError') return { ok: false, reason: 'deepgram-network-timeout' };
+            return { ok: false, reason: 'deepgram-network' };
+        } finally {
+            clearTimeout(t);
+        }
+    }
+
     /* ── Deepgram WebSocket STT ── */
-    function initDeepgram(stream, apiKey, lang, micStatusEl) {
+    async function initDeepgram(stream, apiKey, lang, micStatusEl) {
         const params = new URLSearchParams({
             model: 'nova-2',
             language: toDeepgramLanguage(lang),
@@ -218,80 +238,103 @@
         } catch (e) {
             if (micStatusEl) micStatusEl.classList.add('error');
             console.error('Deepgram WS error:', e);
-            return false;
+            return { ok: false, reason: 'deepgram-ws-constructor' };
         }
 
-        dgSocket.onopen = () => {
-            console.log('Deepgram connected');
-            try {
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-                mediaRecorder.ondataavailable = (e) => {
-                    if (e.data.size > 0 && dgSocket && dgSocket.readyState === WebSocket.OPEN) {
-                        dgSocket.send(e.data);
-                    }
-                };
-                mediaRecorder.start(250);
-            } catch (e) {
-                console.error('MediaRecorder error:', e);
-                if (micStatusEl) micStatusEl.classList.add('error');
-            }
-        };
+        return await new Promise((resolve) => {
+            let settled = false;
+            let opened = false;
+            const finish = (ok, reason) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(handshakeTimer);
+                resolve({ ok, reason });
+            };
+            const handshakeTimer = setTimeout(() => {
+                try { dgSocket?.close(); } catch { /* noop */ }
+                finish(false, 'deepgram-ws-timeout');
+            }, 7000);
 
-        dgSocket.onmessage = (event) => {
-            try {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'SpeechStarted') {
-                    updateListeningPlaceholder();
-                    chrome.runtime.sendMessage({
-                        type: 'VOICE_STARTED',
-                        timestamp: Date.now() - startTime,
-                        audio_start: msg.start || (Date.now() - startTime)
-                    }).catch(() => {});
-                    return;
-                }
-                if (msg.type === 'UtteranceEnd') {
-                    const interim = evList.querySelector('.tl-narration-interim');
-                    if (interim) interim.remove();
-                    chrome.runtime.sendMessage({ type: 'VOICE_ENDED', timestamp: Date.now() - startTime }).catch(() => {});
-                    return;
-                }
-                if (msg.type === 'Results' && msg.channel) {
-                    const alt = msg.channel.alternatives[0];
-                    if (!alt || !alt.transcript) return;
-                    const transcript = normalizeNarrationText(alt.transcript);
-                    if (msg.is_final) {
-                        pendingInterimNarration = '';
-                        const ts = Date.now() - startTime;
-                        if (isMeaningfulNarration(transcript)) {
-                            lastFinalNarrationText = transcript;
-                            chrome.runtime.sendMessage({ type: 'NARRATION_EVENT', text: transcript, timestamp: ts, isFinal: true });
-                            appendNarrationToTimeline(transcript, ts);
+            dgSocket.onopen = () => {
+                opened = true;
+                console.log('Deepgram connected');
+                try {
+                    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+                    mediaRecorder.ondataavailable = (e) => {
+                        if (e.data.size > 0 && dgSocket && dgSocket.readyState === WebSocket.OPEN) {
+                            dgSocket.send(e.data);
                         }
-                    } else {
-                        // "说完再现"：录制中只显示正在聆听占位，不展示 partial 文本。
-                        pendingInterimNarration = '';
-                    }
+                    };
+                    mediaRecorder.start(250);
+                    finish(true, 'ok');
+                } catch (e) {
+                    console.error('MediaRecorder error:', e);
+                    if (micStatusEl) micStatusEl.classList.add('error');
+                    finish(false, 'media-recorder-error');
                 }
-            } catch (e) { /* ignore */ }
-        };
+            };
 
-        dgSocket.onerror = (e) => {
-            const stateMap = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
-            console.error('Deepgram WS error:', {
-                readyState: stateMap[dgSocket?.readyState ?? 3] || String(dgSocket?.readyState),
-                url: wsUrl,
-                eventType: e?.type || 'error'
-            });
-            if (micStatusEl) micStatusEl.classList.add('error');
-        };
+            dgSocket.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'SpeechStarted') {
+                        updateListeningPlaceholder();
+                        chrome.runtime.sendMessage({
+                            type: 'VOICE_STARTED',
+                            timestamp: Date.now() - startTime,
+                            audio_start: msg.start || (Date.now() - startTime)
+                        }).catch(() => {});
+                        return;
+                    }
+                    if (msg.type === 'UtteranceEnd') {
+                        const interim = evList.querySelector('.tl-narration-interim');
+                        if (interim) interim.remove();
+                        chrome.runtime.sendMessage({ type: 'VOICE_ENDED', timestamp: Date.now() - startTime }).catch(() => {});
+                        return;
+                    }
+                    if (msg.type === 'Results' && msg.channel) {
+                        const alt = msg.channel.alternatives[0];
+                        if (!alt || !alt.transcript) return;
+                        const transcript = normalizeNarrationText(alt.transcript);
+                        if (msg.is_final) {
+                            pendingInterimNarration = '';
+                            const ts = Date.now() - startTime;
+                            if (isMeaningfulNarration(transcript)) {
+                                lastFinalNarrationText = transcript;
+                                chrome.runtime.sendMessage({ type: 'NARRATION_EVENT', text: transcript, timestamp: ts, isFinal: true });
+                                appendNarrationToTimeline(transcript, ts);
+                            }
+                        } else {
+                            // "说完再现"：录制中只显示正在聆听占位，不展示 partial 文本。
+                            pendingInterimNarration = '';
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+            };
 
-        dgSocket.onclose = (e) => {
-            console.log('Deepgram WS closed:', e.code, e.reason);
-            if (currentView === 'recording' && e.code !== 1000) {
+            dgSocket.onerror = (e) => {
+                const stateMap = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+                console.error('Deepgram WS error:', {
+                    readyState: stateMap[dgSocket?.readyState ?? 3] || String(dgSocket?.readyState),
+                    url: wsUrl,
+                    eventType: e?.type || 'error'
+                });
                 if (micStatusEl) micStatusEl.classList.add('error');
-            }
-        };
-        return true;
+                if (!opened) finish(false, 'deepgram-ws-error');
+            };
+
+            dgSocket.onclose = (e) => {
+                console.log('Deepgram WS closed:', e.code, e.reason);
+                if (!opened) {
+                    finish(false, 'deepgram-ws-close');
+                    return;
+                }
+                if (currentView === 'recording' && e.code !== 1000) {
+                    if (micStatusEl) micStatusEl.classList.add('error');
+                    toast('语音连接已断开，请暂停后继续重连');
+                }
+            };
+        });
     }
 
     function flushPendingInterimNarration() {
@@ -384,11 +427,18 @@
                 return false;
             }
             sttStream = await getMicStreamForUse();
-            const deepgramStarted = initDeepgram(sttStream, apiKey, lang, micStatusEl);
-            if (!deepgramStarted) {
+            const deepgramStarted = await initDeepgram(sttStream, apiKey, lang, micStatusEl);
+            if (!deepgramStarted.ok) {
                 sttStream.getTracks().forEach(t => t.stop());
                 sttStream = null;
-                sttLastFailure = 'deepgram-init-failed';
+                const probe = await probeDeepgram(apiKey);
+                if (!probe.ok && probe.reason === 'deepgram-key-invalid') {
+                    sttLastFailure = 'deepgram-key-invalid';
+                } else if (!probe.ok && (probe.reason === 'deepgram-network' || probe.reason === 'deepgram-network-timeout')) {
+                    sttLastFailure = 'deepgram-network';
+                } else {
+                    sttLastFailure = deepgramStarted.reason || 'deepgram-init-failed';
+                }
                 micStatusEl?.classList.add('error');
                 return false;
             }
@@ -728,6 +778,12 @@
                 } else if (sttLastFailure === 'mic-unavailable') {
                     enableStartButton();
                     toast('麦克风暂不可用（可能被占用），无法开始录制');
+                } else if (sttLastFailure === 'deepgram-key-invalid') {
+                    enableStartButton();
+                    toast('Deepgram API Key 无效，请在设置中更新后重试');
+                } else if (sttLastFailure === 'deepgram-network') {
+                    enableStartButton();
+                    toast('无法连接 Deepgram（网络或 DNS 问题）');
                 } else {
                     enableStartButton();
                     toast('语音识别初始化失败，无法开始录制');
