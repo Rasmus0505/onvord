@@ -194,11 +194,17 @@
         return await navigator.mediaDevices.getUserMedia({ audio: true });
     }
 
+    function toDeepgramLanguage(lang) {
+        if (lang === 'zh-CN' || lang === 'zh') return 'zh';
+        if (lang === 'en-US' || lang === 'en') return 'en';
+        return 'zh';
+    }
+
     /* ── Deepgram WebSocket STT ── */
     function initDeepgram(stream, apiKey, lang, micStatusEl) {
         const params = new URLSearchParams({
             model: 'nova-2',
-            language: lang,
+            language: toDeepgramLanguage(lang),
             smart_format: 'true',
             interim_results: 'false',
             utterance_end_ms: '3000',
@@ -270,7 +276,12 @@
         };
 
         dgSocket.onerror = (e) => {
-            console.error('Deepgram WS error:', e);
+            const stateMap = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+            console.error('Deepgram WS error:', {
+                readyState: stateMap[dgSocket?.readyState ?? 3] || String(dgSocket?.readyState),
+                url: wsUrl,
+                eventType: e?.type || 'error'
+            });
             if (micStatusEl) micStatusEl.classList.add('error');
         };
 
