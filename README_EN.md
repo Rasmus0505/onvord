@@ -29,8 +29,8 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 
 ### 🎙️ Real-time Speech-to-Text
 - Powered by **Deepgram Nova-2** — streaming WebSocket transcription
-- Supports Chinese, English, Japanese, Korean, and auto language detection
-- Voice narration auto-linked to corresponding action steps
+- Current recognition options: **Chinese (zh-CN)** and **English (en-US)**
+- Voice narration is auto-linked to action steps (non-meaningful text is filtered out)
 
 ### 🖱️ Smart Action Capture
 - Automatically records clicks, inputs, scrolls, and page navigation
@@ -38,27 +38,30 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 - Intelligent filtering of meaningless actions (blank area clicks, etc.)
 - Auto-identifies element types (buttons, links, inputs, icons, etc.)
 
-### 📸 Annotated Screenshots
-- Auto-captures screenshot on every click/selection
-- Click position marked with a visible annotation ring
-- Clear on both light and dark themed pages
+### 📸 Inline Thumbnail Screenshots
+- Auto-captures and annotates screenshots for **click** and **select** events
+- Thumbnails are embedded inside action pills (same pattern during recording and preview)
+- Click any thumbnail to open a larger viewer
 
-### 📋 Hybrid Timeline
-- **Voice** → Merged into continuous narration blocks
-- **Actions** → Compact pill-style tags, minimal vertical space
-- Real-time updates during recording
+### 📋 Single-Page Hybrid Timeline
+- **Recording** and **post-stop preview** share the same timeline view
+- **Voice** → merged narration blocks, with the placeholder text `识别中`
+- **Actions** → compact pills, with merged scroll display (for example `Scroll xN`)
 
 ### 📄 Standalone HTML Export
 - One-click export to self-contained HTML file
-- Dark theme, rich visuals, embedded images
+- Rich visual output with segmented narration and screenshots
 - Send directly to colleagues or upload to AI agents
-- Built-in documentation header — AI understands it immediately
+- Built-in guide plus "Execution Details (For Agent)" for automation
 
 ## Recent Updates (2026-03)
 
 - Refreshed extension icon assets: `icons/icon16.png`, `icons/icon48.png`, `icons/icon128.png`, `icons/logo.png`
 - Speech-to-text now defaults to third-party API (Deepgram); Chrome built-in Web Speech is removed
-- Sidebar label was updated from "Technical Details" to "Execution Details (For Agent)"
+- Recording and preview were unified into one timeline page
+- Sidebar wording was updated to "Execution Details (For Agent)"
+- Voice placeholder changed from line marks to `识别中`
+- Action pills now support inline screenshot thumbnails with click-to-zoom
 - Unrecognized / non-meaningful speech text (for example `...` or punctuation-only) is no longer shown in timeline/preview
 - Scroll actions are filtered by PRD rules and merged in live timeline (for example `Scroll xN`)
 
@@ -91,7 +94,7 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 
 1. Sign up at [Deepgram](https://console.deepgram.com/signup) (free $200 credit)
 2. Create an API Key
-3. Click **⚙️ Set up Speech Recognition API Key** in the extension sidebar
+3. Open the settings page (sidebar "Speech Recognition Settings" link or extension options page)
 4. Paste your key → Test connection → Save
 
 ### 3. Start Recording
@@ -101,7 +104,7 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 3. Click **⏺ Start Recording**
 4. Operate the browser normally while narrating each step
 5. Click **⏹ Stop Recording** → SOP auto-generates
-6. Click **📄 Export Webpage** to download the standalone HTML file
+6. Click **Export SOP** to download the standalone HTML file
 
 ---
 
@@ -112,8 +115,8 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 │  Chrome Extension (Manifest V3)             │
 ├──────────────┬──────────────┬───────────────┤
 │ content.js   │ sidepanel.js │ background.js │
-│ · Capture    │ · UI &       │ · State       │
-│   actions    │   Timeline   │   management  │
+│ · Capture    │ · Unified    │ · State       │
+│   actions    │   timeline UI│   management  │
 │ · Element    │ · Speech     │ · SOP         │
 │   describe   │   (Deepgram) │   generation  │
 │ · Event      │ · HTML       │ · Screenshot  │
