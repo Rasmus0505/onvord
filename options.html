@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Onvord 设置</title>
+    <title>Onvord Settings</title>
     <style>
         :root {
             --bg: #eef3f8;
@@ -47,7 +47,7 @@
         }
 
         .container {
-            max-width: 640px;
+            max-width: 700px;
             width: 100%;
         }
 
@@ -174,6 +174,57 @@
             text-decoration: underline;
         }
 
+        .provider-section {
+            border-top: 1px dashed #d5e2ef;
+            margin-top: 14px;
+            padding-top: 14px;
+        }
+
+        .provider-section.hidden {
+            display: none;
+        }
+
+        .provider-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #294863;
+            margin-bottom: 10px;
+        }
+
+        .field-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .inline-action {
+            margin-bottom: 12px;
+        }
+
+        .inline-action .btn {
+            padding: 8px 12px;
+            font-size: 12px;
+            border-radius: 9px;
+        }
+
+        .advanced-wrap {
+            border: 1px dashed #d5e2ef;
+            border-radius: 12px;
+            padding: 10px;
+            background: #f8fbff;
+            margin-bottom: 12px;
+        }
+
+        .advanced-wrap.hidden {
+            display: none;
+        }
+
+        @media (max-width: 640px) {
+            .field-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
         .btn-row {
             display: flex;
             gap: 10px;
@@ -276,45 +327,83 @@
 <body>
     <div class="container">
         <div class="head">
-            <p class="kicker">Extension Settings</p>
-            <h1>Onvord 语音设置</h1>
-            <p class="subtitle">Onvord 使用 Deepgram 进行语音识别。请先配置 API Key 后再开始录制。</p>
+            <p class="kicker" id="opt-kicker">Extension Settings</p>
+            <h1 id="opt-title">Onvord Voice Settings</h1>
+            <p class="subtitle" id="opt-subtitle">Configure your speech provider and credentials before recording.</p>
         </div>
 
         <div class="card">
-            <div class="card-title">语音引擎（Deepgram）</div>
+            <div class="card-title" id="opt-card-engine">Speech Provider</div>
             <div class="field">
-                <label for="dg-key">API Key</label>
-                <div class="input-wrap">
-                    <input type="password" id="dg-key" placeholder="输入你的 Deepgram API Key">
-                    <button class="toggle-vis" id="toggle-vis" type="button" title="显示/隐藏">👁️</button>
-                </div>
-                <div class="hint">
-                    免费注册即送 $200 额度 → <a href="https://console.deepgram.com/signup"
-                        target="_blank">console.deepgram.com</a>
-                    <br>注册后在 API Keys 页面创建一个 Key，粘贴到这里即可。
-                </div>
-            </div>
-            <div class="field">
-                <label for="dg-lang">识别语言</label>
-                <select id="dg-lang">
-                    <option value="zh-CN">中文（普通话）</option>
-                    <option value="en-US">English (US)</option>
+                <label for="stt-provider" id="opt-label-provider">Provider</label>
+                <select id="stt-provider">
+                    <option value="deepgram">Deepgram</option>
+                    <option value="aliyun">Aliyun (Qwen ASR Realtime)</option>
                 </select>
             </div>
+
+            <section id="provider-deepgram" class="provider-section">
+                <div class="provider-title" id="opt-dg-title">Deepgram</div>
+                <div class="field">
+                    <label for="dg-key" id="opt-label-dg-key">API Key</label>
+                    <div class="input-wrap">
+                        <input type="password" id="dg-key" placeholder="Enter your Deepgram API key">
+                        <button class="toggle-vis" data-toggle-target="dg-key" type="button" title="Show/Hide">👁️</button>
+                    </div>
+                    <div class="hint" id="opt-hint-dg-key">
+                        Free signup includes $200 credit → <a href="https://console.deepgram.com/signup" target="_blank" rel="noreferrer noopener">console.deepgram.com</a>
+                    </div>
+                </div>
+                <div class="field">
+                    <label for="deepgram-lang" id="opt-label-dg-lang">Recognition Language</label>
+                    <select id="deepgram-lang">
+                        <option value="zh-CN">中文</option>
+                        <option value="en-US">English</option>
+                    </select>
+                    <div class="hint" id="opt-hint-dg-lang">Deepgram streaming requires choosing a language explicitly.</div>
+                </div>
+            </section>
+
+            <section id="provider-aliyun" class="provider-section hidden">
+                <div class="provider-title" id="opt-aliyun-title">Aliyun Qwen3-ASR-Flash-Realtime</div>
+                <div class="field">
+                    <label for="aliyun-key" id="opt-label-aliyun-key">API Key</label>
+                    <div class="input-wrap">
+                        <input type="password" id="aliyun-key" placeholder="Enter your DashScope API key">
+                        <button class="toggle-vis" data-toggle-target="aliyun-key" type="button" title="Show/Hide">👁️</button>
+                    </div>
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label for="aliyun-region" id="opt-label-aliyun-region">Region</label>
+                        <select id="aliyun-region">
+                            <option value="cn">China Mainland (Beijing)</option>
+                            <option value="us">US (Virginia)</option>
+                            <option value="intl">International (Singapore)</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="aliyun-model" id="opt-label-aliyun-model">Model</label>
+                        <input type="text" id="aliyun-model" placeholder="qwen3-asr-flash-realtime">
+                    </div>
+                </div>
+                <div class="hint" id="opt-hint-aliyun">Official model: <code>qwen3-asr-flash-realtime</code></div>
+            </section>
+
             <div class="btn-row">
-                <button class="btn btn-primary" id="btn-save">保存设置</button>
-                <button class="btn btn-sec" id="btn-test">测试连接</button>
+                <button class="btn btn-primary" id="btn-save">Save Settings</button>
+                <button class="btn btn-sec" id="btn-test">Test Connection</button>
             </div>
             <div class="status" id="status"></div>
         </div>
 
         <div class="card">
-            <div class="card-title">使用说明</div>
+            <div class="card-title" id="opt-card-notes">Usage Notes</div>
             <div class="notes">
-                <p>• Onvord 仅使用 Deepgram 进行语音识别。</p>
-                <p>• 未配置 API Key 时，录制按钮会被禁用。</p>
-                <p>• 你的 API Key 仅存储在本地浏览器中，不会上传到任何服务器。</p>
+                <p id="opt-note-1">• Select one speech provider for recording.</p>
+                <p id="opt-note-2">• Deepgram requires explicit language (Chinese or English).</p>
+                <p id="opt-note-3">• All credentials are stored locally in browser storage.</p>
+                <p id="opt-note-4">• If credentials are missing, recording will not start.</p>
             </div>
         </div>
     </div>

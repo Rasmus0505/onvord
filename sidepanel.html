@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8">
@@ -21,24 +21,24 @@
           <img src="icons/logo.png" alt="Onvord" />
         </div>
         <h1 class="logo-text">Onvord</h1>
-        <p class="tagline">一边操作，一边讲解<br>AI 立即学会流程</p>
+        <p id="tagline" class="tagline">Operate while explaining<br>AI learns your workflow instantly</p>
       </div>
       <div class="instructions">
-        <div class="inst"><span class="inst-n">1</span><span>打开要演示的网页</span></div>
-        <div class="inst"><span class="inst-n">2</span><span>点击下方按钮开始录制</span></div>
-        <div class="inst"><span class="inst-n">3</span><span>操作浏览器，同时语音讲解</span></div>
-        <div class="inst"><span class="inst-n">4</span><span>完成后生成 SOP，发送给 AI</span></div>
+        <div class="inst"><span class="inst-n">1</span><span id="inst-1">Open the page you want to demonstrate</span></div>
+        <div class="inst"><span class="inst-n">2</span><span id="inst-2">Click start below to begin recording</span></div>
+        <div class="inst"><span class="inst-n">3</span><span id="inst-3">Perform actions while explaining by voice</span></div>
+        <div class="inst"><span class="inst-n">4</span><span id="inst-4">Generate SOP and share with AI</span></div>
       </div>
-      <button id="btn-start" class="btn btn-primary btn-lg"><span class="bi">⏺</span>开始录制</button>
-      <a href="#" id="link-settings" class="settings-link">语音识别设置</a>
+      <button id="btn-start" class="btn btn-primary btn-lg"><span class="bi">⏺</span>Start Recording</button>
+      <a href="#" id="link-settings" class="settings-link">Speech Settings</a>
     </div>
 
     <!-- ② 录制与预览（单页） -->
     <div id="view-recording" class="view">
       <div class="rec-bar">
-        <div class="rec-ind"><span class="rec-dot"></span><span id="rec-label" class="rec-label">录制中</span></div>
+        <div class="rec-ind"><span class="rec-dot"></span><span id="rec-label" class="rec-label">Recording</span></div>
         <div class="rec-right">
-          <span id="mic-status" class="mic-status" title="语音识别">
+          <span id="mic-status" class="mic-status" title="Speech Recognition">
             <span class="mic-icon">🎙️</span>
             <span id="vol-indicator" class="vol-indicator">
               <span class="vol-bar"></span><span class="vol-bar"></span><span class="vol-bar"></span><span class="vol-bar"></span><span class="vol-bar"></span>
@@ -50,25 +50,25 @@
       <!-- Hidden voice-box for Deepgram state (not displayed) -->
       <div id="voice-box" style="display:none"></div>
       <div class="section grow">
-        <h3 class="sec-title">操作记录 <span id="ev-count" class="badge">0</span></h3>
+        <h3 class="sec-title"><span id="sec-title-text">Action Log</span> <span id="ev-count" class="badge">0</span></h3>
         <div id="ev-list" class="ev-list">
-          <div class="placeholder">等待操作或说话…</div>
+          <div class="placeholder" id="timeline-placeholder">Waiting for actions or speech…</div>
         </div>
       </div>
       <div id="rec-actions" class="rec-actions">
-        <button id="btn-stop" class="btn btn-danger btn-lg"><span class="bi">⏹</span>停止录制</button>
-        <button id="btn-pause" class="btn btn-ghost btn-lg"><span class="bi">⏸</span>暂停</button>
+        <button id="btn-stop" class="btn btn-danger btn-lg"><span class="bi">⏹</span>Stop Recording</button>
+        <button id="btn-pause" class="btn btn-ghost btn-lg"><span class="bi">⏸</span>Pause</button>
       </div>
       <div id="preview-actions" class="rec-actions hidden">
-        <button id="btn-export" class="btn btn-primary btn-lg">导出 SOP</button>
-        <button id="btn-redo" class="btn btn-ghost btn-lg">重新录制</button>
+        <button id="btn-export" class="btn btn-primary btn-lg">Export SOP</button>
+        <button id="btn-redo" class="btn btn-ghost btn-lg">Record Again</button>
       </div>
     </div>
   </main>
 
   <div id="img-viewer" class="img-viewer hidden" aria-hidden="true">
-    <button id="img-viewer-close" class="img-viewer-close" aria-label="关闭预览">✕</button>
-    <img id="img-viewer-img" class="img-viewer-img" alt="截图预览" />
+    <button id="img-viewer-close" class="img-viewer-close" aria-label="Close Preview">✕</button>
+    <img id="img-viewer-img" class="img-viewer-img" alt="Screenshot Preview" />
   </div>
 
   <div id="toast" class="toast"></div>

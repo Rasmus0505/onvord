@@ -15,7 +15,8 @@ let state = {
     pausedDuration: 0,
     pauseStartTime: 0,
     startUrl: '',
-    language: 'zh-CN',
+    sttProvider: 'aliyun',
+    language: 'auto',
 
     // Block-based timeline
     timeline: [],        // finalized blocks
@@ -236,6 +237,7 @@ function saveRecoveryData() {
             pendingScrolls: state.pendingScrolls,
             startTime: state.startTime,
             startUrl: state.startUrl,
+            sttProvider: state.sttProvider,
             language: state.language,
             pausedDuration: state.pausedDuration,
             savedAt: Date.now()
@@ -259,14 +261,19 @@ function isRestrictedUrl(url) {
 async function startRecording() {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const activeTab = tabs[0];
-
-    // Load language setting
-    const data = await new Promise(r => chrome.storage.local.get(['deepgramLang'], r));
-
-    const rawLang = String(data.deepgramLang || '');
-    const language = rawLang === 'zh' ? 'zh-CN'
-        : rawLang === 'en' ? 'en-US'
-            : (rawLang === 'zh-CN' || rawLang === 'en-US' ? rawLang : 'zh-CN');
+    if (!activeTab?.id) {
+        return { success: false, reason: 'no-active-tab' };
+    }
+    if (isRestrictedUrl(activeTab.url)) {
+        chrome.runtime.sendMessage({ type: 'RESTRICTED_PAGE', url: activeTab.url }).catch(() => {});
+        return { success: false, reason: 'restricted-page' };
+    }
+    const settings = await chrome.storage.local.get(['sttProvider', 'deepgramLang']);
+    const sttProvider = ['deepgram', 'aliyun'].includes(settings.sttProvider)
+        ? settings.sttProvider
+        : 'aliyun';
+    // Keep metadata aligned with explicit settings instead of browser locale inference.
+    const language = settings.deepgramLang === 'en-US' ? 'en-US' : 'zh-CN';
 
     state = {
         recording: true,
@@ -275,6 +282,7 @@ async function startRecording() {
         pausedDuration: 0,
         pauseStartTime: 0,
         startUrl: activeTab?.url || '',
+        sttProvider,
         language,
         timeline: [],
         currentBlock: null,
@@ -293,8 +301,10 @@ async function startRecording() {
     ensureOffscreen().catch(() => {});
 
     // Inject content script into active tab
-    if (activeTab) {
-        await injectContentScript(activeTab.id, state.startTime);
+    const injected = await injectContentScript(activeTab.id, state.startTime);
+    if (!injected.ok) {
+        state.recording = false;
+        return { success: false, reason: injected.reason || 'inject-failed' };
     }
 
     // Start timers
@@ -307,19 +317,23 @@ async function startRecording() {
 async function injectContentScript(tabId, startTime) {
     try {
         await chrome.tabs.sendMessage(tabId, { type: 'START_RECORDING', startTime });
+        return { ok: true };
     } catch {
         try {
             await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
             await chrome.tabs.sendMessage(tabId, { type: 'START_RECORDING', startTime });
+            return { ok: true };
         } catch (e) {
             // Check if restricted page
             try {
                 const tab = await chrome.tabs.get(tabId);
                 if (isRestrictedUrl(tab.url)) {
                     chrome.runtime.sendMessage({ type: 'RESTRICTED_PAGE', url: tab.url }).catch(() => {});
+                    return { ok: false, reason: 'restricted-page' };
                 }
             } catch {}
             console.warn('inject failed', e);
+            return { ok: false, reason: 'inject-failed' };
         }
     }
 }
@@ -459,12 +473,18 @@ function generateSOP() {
         return { startTime, endTime, text: n.text.trim() };
     });
 
-    // Merge narrations with small gaps (< 5s) into one voice segment
-    const MERGE_GAP = 5000;
+    // Merge narrations only when there is no action event between them.
+    // This keeps backend grouping consistent with live timeline behavior.
     const voiceSegs = [];
-    for (const nr of narrationRanges) {
+    const sortedNarrationRanges = narrationRanges.slice().sort((a, b) => a.startTime - b.startTime);
+    for (const nr of sortedNarrationRanges) {
         const last = voiceSegs[voiceSegs.length - 1];
-        if (last && nr.startTime - last.endTime < MERGE_GAP) {
+        const hasActionBetween = Boolean(last) && actions.some((a) => {
+            const left = Math.min(last.endTime, nr.startTime);
+            const right = Math.max(last.endTime, nr.startTime);
+            return a.timestamp > left && a.timestamp < right;
+        });
+        if (last && !hasActionBetween) {
             last.endTime = Math.max(last.endTime, nr.endTime);
             last.texts.push(nr.text);
         } else {
@@ -627,6 +647,7 @@ function generateSOP() {
             start_time: state.startTime ? new Date(state.startTime).toISOString() : now.toISOString(),
             duration_seconds: Math.round(totalDuration / 1000),
             start_url: state.startUrl,
+            stt_provider: state.sttProvider || 'aliyun',
             language: state.language,
             environment: {
                 user_agent: '',  // filled in sidepanel/export
@@ -885,6 +906,9 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             state.pendingScrolls = recovery.pendingScrolls || [];
             state.startTime = recovery.startTime;
             state.startUrl = recovery.startUrl;
+            state.sttProvider = ['deepgram', 'aliyun'].includes(recovery.sttProvider)
+                ? recovery.sttProvider
+                : 'aliyun';
             state.language = recovery.language;
             // Account for crash gap as paused duration
             const crashGap = Date.now() - (recovery.savedAt || Date.now());

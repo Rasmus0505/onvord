@@ -2,7 +2,9 @@
 (function () {
   'use strict';
 
-  // Guard against duplicate injection
+  // Guard against duplicate injection within the same JS context.
+  // Do not use DOM attributes for this, otherwise extension reload leaves stale marks
+  // and new content script contexts fail to initialize.
   if (window.__onvord_injected) return;
   window.__onvord_injected = true;
 
@@ -10,6 +12,7 @@
   let isPaused = false;
   let recordingStartTime = 0;
   let listenersAttached = false;
+  const IS_ZH = /^zh\b/i.test(navigator.language || '');
 
   /* ── Utilities ── */
 
@@ -96,15 +99,32 @@
     return { selector, xpath, selector_confidence: confidence };
   }
 
-  // Friendly names for common tags
-  const TAG_NAMES = {
+  function quoteText(text) {
+    return IS_ZH ? `「${text}」` : `"${text}"`;
+  }
+
+  const TAG_NAMES = IS_ZH ? {
     a: '链接', button: '按钮', input: '输入框', textarea: '文本框', select: '下拉框',
     img: '图片', video: '视频', audio: '音频', label: '标签',
     h1: '标题', h2: '标题', h3: '标题', h4: '标题', h5: '标题', h6: '标题',
     nav: '导航', form: '表单', table: '表格', li: '列表项', option: '选项',
     details: '折叠区', summary: '折叠标题', dialog: '对话框', menu: '菜单',
     td: '表格单元格', th: '表头', tr: '表格行',
+  } : {
+    a: 'Link', button: 'Button', input: 'Input', textarea: 'Textarea', select: 'Select',
+    img: 'Image', video: 'Video', audio: 'Audio', label: 'Label',
+    h1: 'Heading', h2: 'Heading', h3: 'Heading', h4: 'Heading', h5: 'Heading', h6: 'Heading',
+    nav: 'Navigation', form: 'Form', table: 'Table', li: 'List Item', option: 'Option',
+    details: 'Details', summary: 'Summary', dialog: 'Dialog', menu: 'Menu',
+    td: 'Table Cell', th: 'Table Header', tr: 'Table Row',
   };
+  const ROLE_NAMES = IS_ZH
+    ? { button: '按钮', link: '链接', textbox: '输入框', tab: '标签页', menuitem: '菜单项', checkbox: '复选框', radio: '单选框', switch: '开关', option: '选项' }
+    : { button: 'Button', link: 'Link', textbox: 'Textbox', tab: 'Tab', menuitem: 'Menu Item', checkbox: 'Checkbox', radio: 'Radio', switch: 'Switch', option: 'Option' };
+  const LABEL_ICON = IS_ZH ? '图标' : 'Icon';
+  const LABEL_SELECT_TEXT = IS_ZH ? '选择文字' : 'Select text';
+  const LABEL_INPUT_FALLBACK = IS_ZH ? '输入框' : 'Input';
+  const LABEL_RECORDING_TITLE = IS_ZH ? 'Onvord 录制中' : 'Onvord Recording';
 
   // Interactive tags that should always be recorded
   const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'textarea', 'select', 'option', 'summary', 'label']);
@@ -201,21 +221,21 @@
     if (explicitLabel.trim()) {
       const label = explicitLabel.trim().substring(0, 30);
       const friendly = TAG_NAMES[tag];
-      return friendly ? `${friendly}「${label}」` : `「${label}」`;
+      return friendly ? `${friendly}${quoteText(label)}` : quoteText(label);
     }
 
     if (ICON_TAGS.has(tag) || role === 'img') {
       const parentLabel = el.parentElement?.getAttribute('aria-label') || el.parentElement?.getAttribute('title') || '';
-      if (parentLabel.trim()) return `图标「${parentLabel.trim().substring(0, 20)}」`;
-      return '图标';
+      if (parentLabel.trim()) return `${LABEL_ICON}${quoteText(parentLabel.trim().substring(0, 20))}`;
+      return LABEL_ICON;
     }
 
     if (tag === 'i') {
       const cls = el.className || '';
       if (/icon|fa-|material|bi-/i.test(cls)) {
         const parentLabel = el.parentElement?.getAttribute('aria-label') || el.parentElement?.getAttribute('title') || '';
-        if (parentLabel.trim()) return `图标「${parentLabel.trim().substring(0, 20)}」`;
-        return '图标';
+        if (parentLabel.trim()) return `${LABEL_ICON}${quoteText(parentLabel.trim().substring(0, 20))}`;
+        return LABEL_ICON;
       }
     }
 
@@ -226,13 +246,12 @@
     if (directText) {
       const friendly = TAG_NAMES[tag];
       const short = directText.substring(0, 25);
-      return friendly ? `${friendly}「${short}」` : `「${short}」`;
+      return friendly ? `${friendly}${quoteText(short)}` : quoteText(short);
     }
 
     if (TAG_NAMES[tag]) return TAG_NAMES[tag];
     if (INTERACTIVE_ROLES.has(role)) {
-      const roleNames = { button: '按钮', link: '链接', textbox: '输入框', tab: '标签页', menuitem: '菜单项', checkbox: '复选框', radio: '单选框', switch: '开关', option: '选项' };
-      return roleNames[role] || role;
+      return ROLE_NAMES[role] || role;
     }
 
     return null;
@@ -243,9 +262,39 @@
     return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
   }
 
+  let sendErrorMuted = false;
+  function handleSendError(err) {
+    const msg = String(err?.message || err || '');
+    // Fire-and-forget messages may legitimately close without response.
+    if (/message port closed before a response was received/i.test(msg)) return;
+    // Typical after extension reload/update: old content script context becomes invalid.
+    const isContextInvalid = /Extension context invalidated|Receiving end does not exist/i.test(msg);
+    if (isContextInvalid) {
+      isRecording = false;
+      isPaused = false;
+      if (!sendErrorMuted) {
+        sendErrorMuted = true;
+        console.warn('Onvord message channel unavailable, stop recording in this page context:', msg);
+      }
+      return;
+    }
+    console.warn('Onvord sendMessage failed:', msg || err);
+  }
+
+  function safeSendMessage(payload) {
+    try {
+      const maybePromise = chrome.runtime.sendMessage(payload);
+      if (maybePromise && typeof maybePromise.catch === 'function') {
+        maybePromise.catch(handleSendError);
+      }
+    } catch (e) {
+      handleSendError(e);
+    }
+  }
+
   function send(data) {
     if (!isRecording || isPaused) return;
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'ACTION_EVENT',
       data: { ...data, timestamp: Date.now() - recordingStartTime, url: location.href, pageTitle: document.title }
     });
@@ -269,7 +318,7 @@
       'font-family:-apple-system,BlinkMacSystemFont,sans-serif'
     ].join(';'));
     micIndicatorEl.textContent = '🎙️';
-    micIndicatorEl.title = 'Onvord 录制中';
+    micIndicatorEl.title = LABEL_RECORDING_TITLE;
 
     // Inject pulse animation
     const style = document.createElement('style');
@@ -342,7 +391,7 @@
 
     scrollBufferTimer = setTimeout(() => {
       if (pendingScroll) {
-        chrome.runtime.sendMessage({
+        safeSendMessage({
           type: 'PENDING_SCROLL',
           data: {
             actionType: 'scroll',
@@ -352,7 +401,7 @@
             url: location.href,
             pageTitle: document.title
           }
-        }).catch(() => {});
+        });
         pendingScroll = null;
       }
       scrollAnchor = null; // Reset anchor after scroll sequence ends
@@ -396,7 +445,7 @@
           selector: selectorInfo.selector,
           xpath: selectorInfo.xpath,
           selector_confidence: selectorInfo.selector_confidence,
-          description: `选择文字「${selectedText.substring(0, 30)}」`,
+          description: `${LABEL_SELECT_TEXT}${quoteText(selectedText.substring(0, 30))}`,
           rect: rect(e.target)
         },
         clickX: e.clientX, clickY: e.clientY,
@@ -461,7 +510,7 @@
         selector: selectorInfo.selector,
         xpath: selectorInfo.xpath,
         selector_confidence: selectorInfo.selector_confidence,
-        description: describeElement(t) || '输入框',
+        description: describeElement(t) || LABEL_INPUT_FALLBACK,
         rect: rect(t)
       },
       value: val
@@ -506,6 +555,8 @@
   /* ── Recording control ── */
 
   function start(startTime) {
+    // Defensive cleanup for stale listeners from previous extension contexts.
+    stop();
     const wasRecording = isRecording;
     isRecording = true;
     isPaused = false;

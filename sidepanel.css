@@ -490,10 +490,6 @@ body {
   color: var(--muted-soft);
 }
 
-.voice-interim {
-  color: #7a90a8;
-}
-
 .voice-final {
   color: #183859;
 }
@@ -541,6 +537,55 @@ body {
   line-height: 1.55;
   color: #1b3b5d;
   word-break: break-word;
+}
+
+.tl-narration.tl-narration-interim {
+  border-color: #b8d2ee;
+  border-left-color: #5c97df;
+  background: linear-gradient(90deg, rgba(11, 95, 255, 0.08) 0%, rgba(11, 95, 255, 0.03) 100%);
+  animation: slideIn 170ms ease, interimGlow 1.8s ease-in-out infinite;
+}
+
+.tl-narration.tl-narration-interim .tl-narr-icon {
+  animation: interimMicPulse 1.3s ease-in-out infinite;
+}
+
+.voice-interim {
+  color: #516985;
+}
+
+.voice-interim-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 2px 8px;
+  border-radius: var(--rf);
+  border: 1px solid #c1d8f1;
+  background: #eff6ff;
+  color: #385877;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.voice-interim-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4d8fe0;
+  box-shadow: 0 0 0 0 rgba(77, 143, 224, 0.32);
+  animation: interimDotPulse 1.2s ease-out infinite;
+  flex-shrink: 0;
+}
+
+.voice-interim-status::after {
+  content: "...";
+  display: inline-block;
+  width: 1.15em;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: bottom;
+  animation: interimDots 1s steps(4, end) infinite;
 }
 
 .tl-narr-meta {
@@ -637,6 +682,59 @@ body {
   to {
     opacity: 1;
     transform: translateX(0);
+  }
+}
+
+@keyframes interimGlow {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(92, 151, 223, 0);
+  }
+
+  50% {
+    box-shadow: inset 0 0 0 999px rgba(92, 151, 223, 0.03);
+  }
+}
+
+@keyframes interimMicPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes interimDotPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(77, 143, 224, 0.32);
+  }
+
+  100% {
+    box-shadow: 0 0 0 6px rgba(77, 143, 224, 0);
+  }
+}
+
+@keyframes interimDots {
+  0% {
+    width: 0;
+  }
+
+  100% {
+    width: 1.15em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-narration.tl-narration-interim,
+  .tl-narration.tl-narration-interim .tl-narr-icon,
+  .voice-interim-status::before,
+  .voice-interim-status::after {
+    animation: none !important;
   }
 }
 
