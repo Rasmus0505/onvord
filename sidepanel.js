@@ -18,6 +18,7 @@
     const btnStart = $('btn-start'), btnStop = $('btn-stop');
     const btnPause = $('btn-pause');
     const btnRedo = $('btn-redo');
+    const btnDownload = $('btn-download');
     const recTimer = $('rec-timer'), voiceBox = $('voice-box');
     const recBarEl = document.querySelector('#view-recording .rec-bar');
     const recActionsEl = $('rec-actions');
@@ -50,7 +51,8 @@
             stopRecording: '停止录制',
             pause: '暂停',
             resume: '继续',
-            exportSop: '导出 SOP',
+            exportSop: '复制 SOP',
+            downloadFullSop: '下载完整 SOP（含截图）',
             recordAgain: '重新录制',
             micStatusTitle: '语音识别',
             recognizing: '识别中',
@@ -96,11 +98,24 @@
             toastResumeSttFailed: '恢复语音识别失败，请检查麦克风与语音服务凭证',
             toastResumed: '已继续录制',
             toastPauseResumeFailed: '暂停/继续失败',
-            exportSuccess: '✅ 已导出 SOP',
+            exportSuccess: '✅ 已复制 SOP 到剪切板',
+            downloadSuccess: '✅ 已下载完整 SOP',
+            toastCopyFailed: '复制 SOP 失败',
             toastAutoStopped: '已达到录制时间上限，自动停止',
             toastRestricted: '当前页面操作暂不可录制',
             recoveryPrompt: '发现 {ago} 分钟前的录制数据（{count} 个操作块），是否恢复？',
             toastRecoverySttFailed: '语音识别恢复失败',
+            copySectionIntro: 'SOP 介绍',
+            copySectionNotes: '说明',
+            copySectionOps: '操作',
+            copyFieldStartUrl: '起始页面',
+            copyFieldCreatedAt: '录制时间',
+            copyFieldDuration: '总时长',
+            copyFieldStepCount: '操作步骤数',
+            copyFieldTime: '时间',
+            copyFieldPage: '页面',
+            copyNarrationTitle: '讲解',
+            copyEmptyOps: '暂无操作步骤',
             exportStepAlt: '步骤{step}',
             exportAgentDetail: '执行细节（给 Agent）',
             exportDocTitle: '文档说明',
@@ -130,7 +145,8 @@
             stopRecording: 'Stop Recording',
             pause: 'Pause',
             resume: 'Resume',
-            exportSop: 'Export SOP',
+            exportSop: 'Copy SOP',
+            downloadFullSop: 'Download Full SOP',
             recordAgain: 'Record Again',
             micStatusTitle: 'Speech Recognition',
             recognizing: 'Recognizing',
@@ -176,11 +192,24 @@
             toastResumeSttFailed: 'Failed to resume speech recognition. Check microphone and provider credentials',
             toastResumed: 'Recording resumed',
             toastPauseResumeFailed: 'Pause/Resume failed',
-            exportSuccess: '✅ SOP exported',
+            exportSuccess: '✅ SOP copied to clipboard',
+            downloadSuccess: '✅ Full SOP downloaded',
+            toastCopyFailed: 'Failed to copy SOP',
             toastAutoStopped: 'Recording time limit reached. Stopped automatically',
             toastRestricted: 'Recording is unavailable on this page',
             recoveryPrompt: 'Found recording data from {ago} minutes ago ({count} action groups). Restore?',
             toastRecoverySttFailed: 'Failed to recover speech recognition',
+            copySectionIntro: 'SOP Overview',
+            copySectionNotes: 'Notes',
+            copySectionOps: 'Operations',
+            copyFieldStartUrl: 'Start page',
+            copyFieldCreatedAt: 'Recorded at',
+            copyFieldDuration: 'Duration',
+            copyFieldStepCount: 'Action steps',
+            copyFieldTime: 'Time',
+            copyFieldPage: 'Page',
+            copyNarrationTitle: 'Narration',
+            copyEmptyOps: 'No action steps',
             exportStepAlt: 'Step {step}',
             exportAgentDetail: 'Execution Details (For Agent)',
             exportDocTitle: 'Document Notes',
@@ -227,6 +256,7 @@
         setPauseButton(false);
         if (btnStop) btnStop.innerHTML = `<span class="bi">⏹</span>${t('stopRecording')}`;
         if (btnExport) btnExport.textContent = t('exportSop');
+        if (btnDownload) btnDownload.textContent = t('downloadFullSop');
         if (btnRedo) btnRedo.textContent = t('recordAgain');
         if (recLabelEl) recLabelEl.textContent = t('recRecording');
     }
@@ -258,6 +288,12 @@
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
     }
+    function safeFilename(name) {
+        return String(name || 'SOP')
+            .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+            .replace(/\s+/g, '_')
+            .slice(0, 120);
+    }
     function normalizeExternalUrl(url) {
         if (!url) return '';
         try {
@@ -271,12 +307,6 @@
         if (s.startsWith('data:image/')) return s;
         if (s.startsWith('http://') || s.startsWith('https://')) return s;
         return '';
-    }
-    function safeFilename(name) {
-        return String(name || 'SOP')
-            .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-            .replace(/\s+/g, '_')
-            .slice(0, 120);
     }
     function openMicPermissionGuide() {
         try {
@@ -1974,6 +2004,225 @@
         return stripped || fallback || t('actionFallback');
     }
 
+    function getExportPresentation(sop) {
+        const timelineSegs = buildExportSegmentsFromTimeline(sop);
+        const hasTimelineSegs = timelineSegs.some(seg =>
+            (seg.steps && seg.steps.length > 0) || (seg.type === 'voice' && isMeaningfulNarration(seg.narration))
+        );
+        const segments = hasTimelineSegs
+            ? timelineSegs
+            : ((Array.isArray(sop?.segments) && sop.segments.length > 0)
+                ? sop.segments
+                : [{ type: 'silent', narration: '', steps: sop?.steps || [] }]);
+        const totalSteps = segments.reduce((sum, seg) => sum + ((seg.steps || []).length), 0);
+        return { segments, totalSteps };
+    }
+
+    function decodeHtmlEntities(value) {
+        return String(value || '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
+    }
+
+    function htmlToPlainText(value) {
+        return decodeHtmlEntities(String(value || ''))
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/p>\s*<p>/gi, '\n\n')
+            .replace(/<\/li>\s*<li>/gi, '\n')
+            .replace(/<[^>]+>/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
+    function buildClipboardPayload(sop) {
+        const { segments, totalSteps } = getExportPresentation(sop);
+        const introTitle = t('copySectionIntro');
+        const notesTitle = t('copySectionNotes');
+        const opsTitle = t('copySectionOps');
+        const introLines = [
+            `- ${t('copyFieldStartUrl')}：${sop.startUrl || ''}`,
+            `- ${t('copyFieldCreatedAt')}：${sop.createdAt || ''}`,
+            `- ${t('copyFieldDuration')}：${fmtTime(sop.duration || 0)}`,
+            `- ${t('copyFieldStepCount')}：${totalSteps}`
+        ];
+        const notesLines = [
+            t('exportDocIntro'),
+            htmlToPlainText(t('exportHowToReadItems'))
+        ].filter(Boolean);
+
+        const operationBlocks = [];
+        const operationHtmlBlocks = [];
+        let lastUrl = '';
+
+        for (const seg of segments) {
+            const blockLines = [];
+            const blockHtml = [];
+            const hasVoice = seg.type === 'voice' && isMeaningfulNarration(seg.narration);
+
+            if (hasVoice) {
+                const narrationTitle = t('copyNarrationTitle');
+                blockLines.push(`### ${narrationTitle}`);
+                blockLines.push(seg.narration);
+                if (seg.timeRange) blockLines.push(`- ${t('copyFieldTime')}：${seg.timeRange}`);
+
+                blockHtml.push(`<section class="copy-seg copy-seg-voice">`);
+                blockHtml.push(`<h3>${escapeHtml(narrationTitle)}</h3>`);
+                blockHtml.push(`<p>${escapeHtml(seg.narration)}</p>`);
+                if (seg.timeRange) blockHtml.push(`<p><strong>${escapeHtml(t('copyFieldTime'))}:</strong> ${escapeHtml(seg.timeRange)}</p>`);
+            } else {
+                blockHtml.push(`<section class="copy-seg">`);
+            }
+
+            for (const step of (seg.steps || [])) {
+                const desc = normalizeNarrationText(step?.action?.description || step?.action?.type || t('actionFallback'));
+                const stepLines = [`${step.stepNumber}. ${desc}`];
+                const stepMeta = [];
+                const stepMetaHtml = [];
+                if (step?.timestamp) {
+                    stepMeta.push(`- ${t('copyFieldTime')}：${step.timestamp}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('copyFieldTime'))}:</strong> ${escapeHtml(step.timestamp)}</li>`);
+                }
+                const stepUrl = normalizeNarrationText(step?.action?.url || '');
+                if (stepUrl && stepUrl !== lastUrl) {
+                    stepMeta.push(`- ${t('copyFieldPage')}：${stepUrl}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('copyFieldPage'))}:</strong> ${escapeHtml(stepUrl)}</li>`);
+                    lastUrl = stepUrl;
+                }
+                const selector = normalizeNarrationText(step?.action?.selector || '');
+                if (selector) {
+                    stepMeta.push(`- ${t('exportAgentDetail')}：${selector}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('exportAgentDetail'))}:</strong> <code>${escapeHtml(selector)}</code></li>`);
+                }
+                if (stepMeta.length) stepLines.push(stepMeta.map(line => `   ${line}`).join('\n'));
+                blockLines.push(stepLines.join('\n'));
+
+                blockHtml.push(`<div class="copy-step"><p><strong>${escapeHtml(`${step.stepNumber}. ${desc}`)}</strong></p>${stepMetaHtml.length ? `<ul>${stepMetaHtml.join('')}</ul>` : ''}</div>`);
+            }
+
+            if (hasVoice || (seg.steps || []).length) {
+                operationBlocks.push(blockLines.join('\n\n').trim());
+                blockHtml.push(`</section>`);
+                operationHtmlBlocks.push(blockHtml.join(''));
+            }
+        }
+
+        if (!operationBlocks.length) {
+            operationBlocks.push(t('copyEmptyOps'));
+            operationHtmlBlocks.push(`<p>${escapeHtml(t('copyEmptyOps'))}</p>`);
+        }
+
+        const plainText = [
+            `# ${sop.title || 'SOP'}`,
+            `## ${introTitle}`,
+            introLines.join('\n'),
+            `## ${notesTitle}`,
+            notesLines.join('\n\n'),
+            `## ${opsTitle}`,
+            operationBlocks.join('\n\n')
+        ].join('\n\n').trim();
+
+        const html = [
+            `<article>`,
+            `<h1>${escapeHtml(sop.title || 'SOP')}</h1>`,
+            `<h2>${escapeHtml(introTitle)}</h2>`,
+            `<ul>${introLines.map(line => `<li>${escapeHtml(line.replace(/^- /, ''))}</li>`).join('')}</ul>`,
+            `<h2>${escapeHtml(notesTitle)}</h2>`,
+            notesLines.map(line => `<p>${escapeHtml(line)}</p>`).join(''),
+            `<h2>${escapeHtml(opsTitle)}</h2>`,
+            operationHtmlBlocks.join(''),
+            `</article>`
+        ].join('');
+
+        return { plainText, html };
+    }
+
+    async function writeClipboard(payload) {
+        const plainText = String(payload?.plainText || '').trim();
+        const html = String(payload?.html || '').trim();
+        if (!plainText) throw new Error('empty-clipboard-payload');
+
+        if (navigator.clipboard?.write && window.ClipboardItem) {
+            try {
+                const item = new ClipboardItem({
+                    'text/plain': new Blob([plainText], { type: 'text/plain' }),
+                    'text/html': new Blob([html || `<pre>${escapeHtml(plainText)}</pre>`], { type: 'text/html' })
+                });
+                await navigator.clipboard.write([item]);
+                return;
+            } catch (e) {
+                console.warn('Clipboard rich write failed, fallback to text:', e);
+            }
+        }
+
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(plainText);
+            return;
+        }
+
+        const ta = document.createElement('textarea');
+        ta.value = plainText;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        ta.style.pointerEvents = 'none';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length);
+        const ok = document.execCommand('copy');
+        ta.remove();
+        if (!ok) throw new Error('clipboard-copy-failed');
+    }
+
+    function buildDownloadHtml(sop) {
+        const { segments, totalSteps } = getExportPresentation(sop);
+        let stepsHtml = '';
+        let lastUrl = '';
+
+        for (const seg of segments) {
+            const isVoice = seg.type === 'voice' && isMeaningfulNarration(seg.narration);
+            stepsHtml += `<div class="sop-segment ${isVoice ? 'sop-seg-voice' : 'sop-seg-silent'}">`;
+            if (isVoice) {
+                stepsHtml += `<div class="seg-narration"><span class="seg-icon">🎙️</span><span class="seg-text">${escapeHtml(seg.narration)}</span>${seg.timeRange ? `<span class="seg-time">${escapeHtml(seg.timeRange)}</span>` : ''}</div>`;
+            }
+            for (const s of (seg.steps || [])) {
+                const descHtml = escapeHtml(s.action?.description || s.action?.type || t('actionFallback'));
+                let body = '';
+                const stepUrl = s.action?.url || '';
+                if (stepUrl && stepUrl !== lastUrl) {
+                    const safeUrl = normalizeExternalUrl(stepUrl);
+                    if (safeUrl) {
+                        body += `<div class="step-url">🔗 <a href="${escapeHtml(safeUrl)}" target="_blank" rel="noreferrer noopener">${escapeHtml(stepUrl)}</a></div>`;
+                    } else {
+                        body += `<div class="step-url">🔗 ${escapeHtml(stepUrl)}</div>`;
+                    }
+                    lastUrl = stepUrl;
+                }
+                const safeImage = normalizeImageSrc(s.screenshot);
+                if (safeImage) body += `<img class="step-img" src="${escapeHtml(safeImage)}" alt="${escapeHtml(t('exportStepAlt', { step: s.stepNumber }))}" loading="lazy">`;
+                if (s.action?.selector) body += `<details class="step-code-details"><summary class="step-code-summary">${escapeHtml(t('exportAgentDetail'))}</summary><div class="step-sel">${escapeHtml(s.action.selector)}</div></details>`;
+                stepsHtml += `<article class="sop-step"><header class="sop-hdr"><span class="step-n">${escapeHtml(s.stepNumber)}</span><span class="step-act">${descHtml}</span><span class="step-t">${escapeHtml(s.timestamp || '')}</span></header>${body ? `<div class="sop-body">${body}</div>` : ''}</article>`;
+            }
+            stepsHtml += `</div>`;
+        }
+
+        const summaryLines = t('exportSummaryLines', {
+            startUrl: escapeHtml(sop.startUrl || ''),
+            createdAt: escapeHtml(sop.createdAt || ''),
+            steps: escapeHtml(totalSteps),
+            duration: escapeHtml(fmtTime(sop.duration || 0))
+        });
+        const desc = `<section class="doc-desc"><h2>${escapeHtml(t('exportDocTitle'))}</h2><p>${escapeHtml(t('exportDocIntro'))}</p><p><strong>${escapeHtml(t('exportHowToRead'))}</strong><br>${t('exportHowToReadItems')}</p><p><strong>${escapeHtml(t('exportSummary'))}</strong><br>${summaryLines}</p></section>`;
+        const sopJson = JSON.stringify(sop)
+            .replace(/</g, '\\u003c')
+            .replace(/-->/g, '--\\u003e');
+
+        return `<!DOCTYPE html><html lang="${escapeHtml(t('exportLang'))}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(sop.title || 'SOP')}</title><style>:root{--bg:#eef3f8;--surface:#fff;--surface-2:#f7fafc;--line:#d8e2ec;--text:#102a43;--muted:#52667a;--muted-soft:#7b8ea4;--ac:#0b5fff;--ach:#2f80ff;--ac-g:rgba(11,95,255,.2);--r-md:14px;--r-lg:18px;--rf:999px}*{margin:0;padding:0;box-sizing:border-box}body{font-family:"Public Sans","Manrope",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);line-height:1.65;background:radial-gradient(circle at 92% 6%,rgba(11,95,255,.12) 0%,transparent 32%),linear-gradient(180deg,#f8fbff 0%,var(--bg) 100%);padding:24px 16px;-webkit-font-smoothing:antialiased}img{max-width:100%}.shell{max-width:940px;margin:0 auto}.hero{border:1px solid var(--line);background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-radius:var(--r-lg);padding:18px;box-shadow:0 12px 24px rgba(12,27,61,.08);margin-bottom:12px}.hero-kicker{display:inline-flex;align-items:center;border-radius:var(--rf);border:1px solid #c4d3e2;background:#f4f8fd;color:#3c5471;padding:4px 10px;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace;margin-bottom:8px}.title{font-family:"Nunito Sans","Public Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:30px;font-weight:800;line-height:1.08;letter-spacing:-.02em;color:#123454;margin-bottom:9px}.meta{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--rf);font-size:12px;font-weight:700}.badge-primary{background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff}.badge-soft{background:#eaf1f9;color:#3d5774}.doc-desc{border:1px solid var(--line);background:rgba(255,255,255,.92);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 10px 20px rgba(12,27,61,.07);margin-bottom:12px;font-size:13px;color:var(--muted)}.doc-desc h2{font-size:14px;color:#173453;margin-bottom:8px}.doc-desc p{margin-bottom:8px}.doc-desc p:last-child{margin-bottom:0}.steps{display:flex;flex-direction:column;gap:12px}.sop-step{border:1px solid var(--line);background:#fff;border-radius:var(--r-md);overflow:hidden;box-shadow:0 10px 20px rgba(12,27,61,.07)}.sop-hdr{display:flex;align-items:center;gap:10px;padding:11px 12px;background:#fbfdff;border-bottom:1px solid #e2eaf3}.step-n{width:24px;height:24px;border-radius:var(--rf);display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff;font-size:11px;font-weight:700;flex-shrink:0}.step-act{flex:1;font-size:13px;font-weight:700;color:#1a3a5c}.step-act-val{color:#5f7690;font-weight:500}.step-t{font-size:11px;color:#6e849a;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace;white-space:nowrap}.sop-body{padding:10px 12px}.step-url{font-size:12px;color:#6e849a;padding:7px 10px;background:#f7fbff;border-radius:8px;border:1px solid #dbe7f4;margin-bottom:10px;word-break:break-all}.step-url a{color:#0b5fff;text-decoration:none}.step-url a:hover{text-decoration:underline}.step-img{width:100%;border-radius:8px;border:1px solid #e0e8f1;margin-bottom:10px}.step-code-details{margin-top:8px}.step-code-summary{cursor:pointer;user-select:none;border:1px solid #d9e4ef;border-radius:8px;background:#f9fcff;color:#4b6784;font-size:12px;font-weight:600;padding:6px 9px}.step-code-summary:hover{border-color:#c4d8ec;background:#fff;color:#2a4a6d}.step-sel{padding:6px 9px;border-radius:0 0 8px 8px;border:1px solid #d9e4ef;border-top:none;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace;font-size:11px;color:#5b7390;word-break:break-all;background:#f9fcff}.sop-segment{display:flex;flex-direction:column;gap:10px}.sop-seg-voice{border-left:3px solid var(--ac);padding-left:12px}.sop-seg-silent{border-left:3px solid #d5e2ef;padding-left:12px}.seg-narration{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(11,95,255,.06);border:1px solid rgba(11,95,255,.12);font-size:13px;line-height:1.6;color:#1a3a5c}.seg-icon{flex-shrink:0;font-size:14px}.seg-text{flex:1}.seg-time{flex-shrink:0;font-size:11px;color:#7b8ea4;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace}.footer{text-align:center;padding:18px 8px;color:#71859b;font-size:12px}@media (max-width:680px){body{padding:12px}.hero{padding:14px}.title{font-size:24px}.sop-hdr{align-items:flex-start}.step-t{padding-top:3px}}</style></head><body><div class="shell"><section class="hero"><p class="hero-kicker">ONVORD SOP EXPORT</p><h1 class="title">${escapeHtml(sop.title || 'SOP')}</h1><div class="meta"><span class="badge badge-primary">${escapeHtml(totalSteps)} ${escapeHtml(t('exportStepsUnit'))}</span><span class="badge badge-soft">${escapeHtml(fmtTime(sop.duration || 0))}</span></div></section>${desc}<section class="steps">${stepsHtml}</section><footer class="footer">${escapeHtml(t('exportGeneratedBy', { createdAt: sop.createdAt || '' }))}</footer></div><script id="onvord-sop-json" type="application/json">${sopJson}</script></body></html>`;
+    }
+
     function buildExportSegmentsFromTimeline(sop) {
         const timelineItems = Array.from(evList?.children || []);
         if (!timelineItems.length) return [];
@@ -2063,70 +2312,36 @@
         return segments;
     }
 
-    function doExportHTML() {
+    async function doCopySOP() {
         if (!currentSOP) return;
         const sop = currentSOP;
-        let stepsHtml = '';
-        let lastUrl = '';
-
-        const timelineSegs = buildExportSegmentsFromTimeline(sop);
-        const hasTimelineSegs = timelineSegs.some(seg =>
-            (seg.steps && seg.steps.length > 0) || (seg.type === 'voice' && isMeaningfulNarration(seg.narration))
-        );
-        const segs = hasTimelineSegs
-            ? timelineSegs
-            : ((Array.isArray(sop.segments) && sop.segments.length > 0)
-                ? sop.segments
-                : [{ type: 'silent', narration: '', steps: sop.steps || [] }]);
-        const exportTotalSteps = segs.reduce((sum, seg) => sum + ((seg.steps || []).length), 0);
-
-        for (const seg of segs) {
-            const isVoice = seg.type === 'voice' && seg.narration;
-            stepsHtml += `<div class="sop-segment ${isVoice ? 'sop-seg-voice' : 'sop-seg-silent'}">`;
-            if (isVoice) {
-                stepsHtml += `<div class="seg-narration"><span class="seg-icon">🎙️</span><span class="seg-text">${escapeHtml(seg.narration)}</span>${seg.timeRange ? `<span class="seg-time">${escapeHtml(seg.timeRange)}</span>` : ''}</div>`;
-            }
-            for (const s of (seg.steps || [])) {
-                const descHtml = escapeHtml(s.action?.description || s.action?.type || t('actionFallback'));
-                let body = '';
-                const stepUrl = s.action?.url || '';
-                if (stepUrl && stepUrl !== lastUrl) {
-                    const safeUrl = normalizeExternalUrl(stepUrl);
-                    if (safeUrl) {
-                        body += `<div class="step-url">🔗 <a href="${escapeHtml(safeUrl)}" target="_blank" rel="noreferrer noopener">${escapeHtml(stepUrl)}</a></div>`;
-                    } else {
-                        body += `<div class="step-url">🔗 ${escapeHtml(stepUrl)}</div>`;
-                    }
-                    lastUrl = stepUrl;
-                }
-                const safeImage = normalizeImageSrc(s.screenshot);
-                if (safeImage) body += `<img class="step-img" src="${escapeHtml(safeImage)}" alt="${escapeHtml(t('exportStepAlt', { step: s.stepNumber }))}" loading="lazy">`;
-                if (s.action?.selector) body += `<details class="step-code-details"><summary class="step-code-summary">${escapeHtml(t('exportAgentDetail'))}</summary><div class="step-sel">${escapeHtml(s.action.selector)}</div></details>`;
-                stepsHtml += `<article class="sop-step"><header class="sop-hdr"><span class="step-n">${escapeHtml(s.stepNumber)}</span><span class="step-act">${descHtml}</span><span class="step-t">${escapeHtml(s.timestamp || '')}</span></header>${body ? `<div class="sop-body">${body}</div>` : ''}</article>`;
-            }
-            stepsHtml += `</div>`;
+        try {
+            const payload = buildClipboardPayload(sop);
+            await writeClipboard(payload);
+            toast(t('exportSuccess'));
+        } catch (e) {
+            console.error('Copy SOP failed:', e);
+            toast(t('toastCopyFailed'));
         }
+    }
 
-        const summaryLines = t('exportSummaryLines', {
-            startUrl: escapeHtml(sop.startUrl || ''),
-            createdAt: escapeHtml(sop.createdAt || ''),
-            steps: escapeHtml(exportTotalSteps),
-            duration: escapeHtml(fmtTime(sop.duration || 0))
-        });
-        const desc = `<section class="doc-desc"><h2>${escapeHtml(t('exportDocTitle'))}</h2><p>${escapeHtml(t('exportDocIntro'))}</p><p><strong>${escapeHtml(t('exportHowToRead'))}</strong><br>${t('exportHowToReadItems')}</p><p><strong>${escapeHtml(t('exportSummary'))}</strong><br>${summaryLines}</p></section>`;
-
-        const sopJson = JSON.stringify(sop)
-            .replace(/</g, '\\u003c')
-            .replace(/-->/g, '--\\u003e');
-        const html = `<!DOCTYPE html><html lang="${escapeHtml(t('exportLang'))}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(sop.title || 'SOP')}</title><style>:root{--bg:#eef3f8;--surface:#fff;--surface-2:#f7fafc;--line:#d8e2ec;--text:#102a43;--muted:#52667a;--muted-soft:#7b8ea4;--ac:#0b5fff;--ach:#2f80ff;--ac-g:rgba(11,95,255,.2);--r-md:14px;--r-lg:18px;--rf:999px}*{margin:0;padding:0;box-sizing:border-box}body{font-family:\"Public Sans\",\"Manrope\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;color:var(--text);line-height:1.65;background:radial-gradient(circle at 92% 6%,rgba(11,95,255,.12) 0%,transparent 32%),linear-gradient(180deg,#f8fbff 0%,var(--bg) 100%);padding:24px 16px;-webkit-font-smoothing:antialiased}img{max-width:100%}.shell{max-width:940px;margin:0 auto}.hero{border:1px solid var(--line);background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-radius:var(--r-lg);padding:18px;box-shadow:0 12px 24px rgba(12,27,61,.08);margin-bottom:12px}.hero-kicker{display:inline-flex;align-items:center;border-radius:var(--rf);border:1px solid #c4d3e2;background:#f4f8fd;color:#3c5471;padding:4px 10px;text-transform:uppercase;letter-spacing:.08em;font-size:10px;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;margin-bottom:8px}.title{font-family:\"Nunito Sans\",\"Public Sans\",-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;font-size:30px;font-weight:800;line-height:1.08;letter-spacing:-.02em;color:#123454;margin-bottom:9px}.meta{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:var(--rf);font-size:12px;font-weight:700}.badge-primary{background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff}.badge-soft{background:#eaf1f9;color:#3d5774}.doc-desc{border:1px solid var(--line);background:rgba(255,255,255,.92);border-radius:var(--r-md);padding:14px 15px;box-shadow:0 10px 20px rgba(12,27,61,.07);margin-bottom:12px;font-size:13px;color:var(--muted)}.doc-desc h2{font-size:14px;color:#173453;margin-bottom:8px}.doc-desc p{margin-bottom:8px}.doc-desc p:last-child{margin-bottom:0}.steps{display:flex;flex-direction:column;gap:12px}.sop-step{border:1px solid var(--line);background:#fff;border-radius:var(--r-md);overflow:hidden;box-shadow:0 10px 20px rgba(12,27,61,.07)}.sop-hdr{display:flex;align-items:center;gap:10px;padding:11px 12px;background:#fbfdff;border-bottom:1px solid #e2eaf3}.step-n{width:24px;height:24px;border-radius:var(--rf);display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(120deg,var(--ac),var(--ach));color:#fff;font-size:11px;font-weight:700;flex-shrink:0}.step-act{flex:1;font-size:13px;font-weight:700;color:#1a3a5c}.step-act-val{color:#5f7690;font-weight:500}.step-t{font-size:11px;color:#6e849a;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;white-space:nowrap}.sop-body{padding:10px 12px}.step-url{font-size:12px;color:#6e849a;padding:7px 10px;background:#f7fbff;border-radius:8px;border:1px solid #dbe7f4;margin-bottom:10px;word-break:break-all}.step-url a{color:#0b5fff;text-decoration:none}.step-url a:hover{text-decoration:underline}.step-narr{font-size:13px;line-height:1.6;color:#2f4a66;border-radius:8px;border:1px solid #d2e1f0;border-left:3px solid var(--ac);background:rgba(11,95,255,.05);padding:8px 10px;margin-bottom:10px}.step-narr::before{content:\"讲解：\";font-weight:700;color:#1f3e60}.step-img{width:100%;border-radius:8px;border:1px solid #e0e8f1;margin-bottom:10px}.step-code-details{margin-top:8px}.step-code-summary{cursor:pointer;user-select:none;border:1px solid #d9e4ef;border-radius:8px;background:#f9fcff;color:#4b6784;font-size:12px;font-weight:600;padding:6px 9px}.step-code-summary:hover{border-color:#c4d8ec;background:#fff;color:#2a4a6d}.step-sel{padding:6px 9px;border-radius:0 0 8px 8px;border:1px solid #d9e4ef;border-top:none;font-family:\"IBM Plex Mono\",\"SF Mono\",Menlo,monospace;font-size:11px;color:#5b7390;word-break:break-all;background:#f9fcff}.sop-segment{display:flex;flex-direction:column;gap:10px}.sop-seg-voice{border-left:3px solid var(--ac);padding-left:12px}.sop-seg-silent{border-left:3px solid #d5e2ef;padding-left:12px}.seg-narration{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(11,95,255,.06);border:1px solid rgba(11,95,255,.12);font-size:13px;line-height:1.6;color:#1a3a5c}.seg-icon{flex-shrink:0;font-size:14px}.seg-text{flex:1}.seg-time{flex-shrink:0;font-size:11px;color:#7b8ea4;font-family:"IBM Plex Mono","SF Mono",Menlo,monospace}.footer{text-align:center;padding:18px 8px;color:#71859b;font-size:12px}@media (max-width:680px){body{padding:12px}.hero{padding:14px}.title{font-size:24px}.sop-hdr{align-items:flex-start}.step-t{padding-top:3px}}</style></head><body><div class="shell"><section class="hero"><p class="hero-kicker">ONVORD SOP EXPORT</p><h1 class="title">${escapeHtml(sop.title || 'SOP')}</h1><div class="meta"><span class="badge badge-primary">${escapeHtml(exportTotalSteps)} ${escapeHtml(t('exportStepsUnit'))}</span><span class="badge badge-soft">${escapeHtml(fmtTime(sop.duration || 0))}</span></div></section>${desc}<section class="steps">${stepsHtml}</section><footer class="footer">${escapeHtml(t('exportGeneratedBy', { createdAt: sop.createdAt || '' }))}</footer></div><script id="onvord-sop-json" type="application/json">${sopJson}</script></body></html>`;
-
-        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `${safeFilename(sop.title)}.html`;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        toast(t('exportSuccess'));
+    function doDownloadHTML() {
+        if (!currentSOP) return;
+        const sop = currentSOP;
+        try {
+            const html = buildDownloadHtml(sop);
+            const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+            const a = document.createElement('a');
+            const href = URL.createObjectURL(blob);
+            a.href = href;
+            a.download = `${safeFilename(sop.title)}.html`;
+            a.click();
+            URL.revokeObjectURL(href);
+            toast(t('downloadSuccess'));
+        } catch (e) {
+            console.error('Download SOP failed:', e);
+            toast(t('toastGenerateFailed'));
+        }
     }
 
     /* ── Wire up ── */
@@ -2136,7 +2351,8 @@
     btnStart.addEventListener('click', doStart);
     btnStop.addEventListener('click', doStop);
     btnPause?.addEventListener('click', doTogglePause);
-    btnExport.addEventListener('click', doExportHTML);
+    btnExport.addEventListener('click', doCopySOP);
+    btnDownload?.addEventListener('click', doDownloadHTML);
     btnRedo.addEventListener('click', () => {
         stopVolumeVis();
         currentSOP = null;

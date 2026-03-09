@@ -253,6 +253,22 @@ body {
   flex: 1;
 }
 
+.preview-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-actions-secondary {
+  display: flex;
+  gap: 10px;
+}
+
+.preview-actions-secondary .btn {
+  width: auto;
+  flex: 1;
+}
+
 .hidden {
   display: none !important;
 }
