@@ -425,7 +425,11 @@ function actionDesc(ev) {
         case 'input': return `在 ${ev.target?.description || '输入框'} 中输入 "${(ev.value || '').substring(0, 40)}"`;
         case 'navigate':
         case 'navigation': return `导航到 ${ev.pageTitle || ev.url}`;
-        case 'select': return `选择文字「${(ev.value || '').substring(0, 40)}」`;
+        case 'select':
+            if (String(ev.target?.tag || '').toLowerCase() === 'select') {
+                return `在 ${ev.target?.description || '下拉框'} 中选择 "${(ev.value || '').substring(0, 40)}"`;
+            }
+            return `选择文字「${(ev.value || '').substring(0, 40)}」`;
         case 'keypress': return `按下 ${ev.key || ev.value || '快捷键'}`;
         case 'scroll': return `页面${direction}滚动 ${distance}px`;
         default: return ev.actionType;

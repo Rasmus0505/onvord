@@ -21,6 +21,8 @@
 
 The generated SOP is both **human-friendly** (rich screenshots, clear steps) and **AI-ready** (precise CSS selectors and action semantics that AI agents can execute).
 
+> This directory is the **Onvord open-source edition (OSS)**. You bring your own speech API credentials.
+
 > 🎯 **In one sentence**: Do it once, let AI do it a thousand times.
 
 ---
@@ -28,9 +30,10 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 ## Features
 
 ### 🎙️ Real-time Speech-to-Text
-- Powered by **Deepgram Nova-2** — streaming WebSocket transcription
+- Supports self-configured **Deepgram** and **Aliyun Qwen Realtime ASR**
 - Current recognition options: **Chinese (zh-CN)** and **English (en-US)**
 - Voice narration is auto-linked to action steps (non-meaningful text is filtered out)
+- Provider credentials stay only in your local browser storage
 
 ### 🖱️ Smart Action Capture
 - Automatically records clicks, inputs, scrolls, and page navigation
@@ -57,13 +60,14 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 ## Recent Updates (2026-03)
 
 - Refreshed extension icon assets: `icons/icon16.png`, `icons/icon48.png`, `icons/icon128.png`, `icons/logo.png`
-- Speech-to-text now defaults to third-party API (Deepgram); Chrome built-in Web Speech is removed
+- The OSS edition now supports self-configured `Deepgram` and `Aliyun Qwen Realtime ASR`
 - Recording and preview were unified into one timeline page
 - Sidebar wording was updated to "Execution Details (For Agent)"
 - Voice placeholder changed from line marks to `识别中`
 - Action pills now support inline screenshot thumbnails with click-to-zoom
 - Unrecognized / non-meaningful speech text (for example `...` or punctuation-only) is no longer shown in timeline/preview
 - Scroll actions are filtered by PRD rules and merged in live timeline (for example `Scroll xN`)
+- The Aliyun realtime path now has a safer stop flow plus `AudioWorklet` capture fallback
 
 ---
 
@@ -92,9 +96,9 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 
 ### 2. Configure Speech Recognition
 
-1. Sign up at [Deepgram](https://console.deepgram.com/signup) (free $200 credit)
-2. Create an API Key
-3. Open the settings page (sidebar "Speech Recognition Settings" link or extension options page)
+1. Choose one provider: `Deepgram` or `Aliyun Qwen Realtime ASR`
+2. Prepare the corresponding API key
+3. Open the settings page (sidebar "Settings" link or the extension options page)
 4. Paste your key → Test connection → Save
 
 ### 3. Start Recording
@@ -117,25 +121,31 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 │ content.js   │ sidepanel.js │ background.js │
 │ · Capture    │ · Unified    │ · State       │
 │   actions    │   timeline UI│   management  │
-│ · Element    │ · Speech     │ · SOP         │
-│   describe   │   (Deepgram) │   generation  │
+│ · Element    │ · Speech STT │ · SOP         │
+│   describe   │              │   generation  │
 │ · Event      │ · HTML       │ · Screenshot  │
 │   filtering  │   export     │   annotation  │
 └──────────────┴──────────────┴───────────────┘
          │                          │
-    ┌────┴────┐              ┌──────┴──────┐
-    │ Deepgram │              │ Offscreen   │
-    │ WebSocket│              │ Canvas      │
-    │ (STT)    │              │ (Annotate)  │
-    └──────────┘              └─────────────┘
+    ┌───────────────┐         ┌──────┴──────┐
+    │ Deepgram /    │         │ Offscreen   │
+    │ Aliyun STT    │         │ Canvas      │
+    │ WebSocket API │         │ (Annotate)  │
+    └───────────────┘         └─────────────┘
 ```
+
+- **content.js** — injected into pages to capture user actions (clicks, inputs, text selection)
+- **sidepanel.js** — sidebar UI, unified recording/preview timeline, Deepgram / Aliyun speech recognition, SOP export
+- **background.js** — service worker for recording state, SOP generation, and screenshot annotation
+- **annotate.js** — offscreen document for marking click positions on screenshots
+- **aliyun-pcm-worklet.js** — PCM capture worklet used by the Aliyun realtime path
 
 ---
 
 ## Privacy & Security
 
 - 🔒 **API Key stored locally** — Only in `chrome.storage.local`, never uploaded
-- 🔒 **Voice data** — Sent directly to Deepgram, Onvord stores no audio
+- 🔒 **Voice data** — Sent directly to your selected provider (Deepgram or Aliyun); Onvord stores no audio
 - 🔒 **Screenshots** — Processed entirely in your browser, never leave your machine
 - 🔒 **Open source** — Full source code available for audit
 
@@ -143,7 +153,7 @@ The generated SOP is both **human-friendly** (rich screenshots, clear steps) and
 
 ## Roadmap
 
-- [x] Real-time speech-to-text (Deepgram)
+- [x] Real-time speech-to-text (Deepgram / Aliyun)
 - [x] Smart action capture & filtering
 - [x] Screenshot click-position annotation
 - [x] Hybrid timeline (narration blocks + action pills)

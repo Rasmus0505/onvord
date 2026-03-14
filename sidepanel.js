@@ -64,16 +64,20 @@
             keypressFallback: '快捷键',
             actionClick: '点击 {target}',
             actionInput: '输入「{value}」',
+            actionInputWithTarget: '在 {target} 中输入「{value}」',
+            actionInputTargetOnly: '在 {target} 中输入',
             actionScroll: '滚动',
             actionScrollMerged: '滚动（合并 {count} 次）',
             actionSelect: '选择「{value}」',
+            actionSelectWithTarget: '在 {target} 中选择「{value}」',
+            actionSelectTargetOnly: '在 {target} 中选择',
             actionClickElement: '点击元素',
             actionInputShort: '输入',
             actionSelectShort: '选择',
             actionNavigate: '页面跳转',
             clickPointScreenshot: '步骤 {step} 截图',
             startNeedKey: '请先设置 API Key',
-            startNeedMic: '请先授权麦克风',
+            startNeedMic: '开启麦克风权限',
             startProviderUnsupported: '当前语音服务暂不支持',
             initStt: '初始化语音识别…',
             toastWsDisconnected: '语音连接已断开，请暂停后继续重连',
@@ -158,16 +162,20 @@
             keypressFallback: 'Shortcut',
             actionClick: 'Click {target}',
             actionInput: 'Type "{value}"',
+            actionInputWithTarget: 'Type "{value}" in {target}',
+            actionInputTargetOnly: 'Type in {target}',
             actionScroll: 'Scroll',
             actionScrollMerged: 'Scroll (merged {count})',
             actionSelect: 'Select "{value}"',
+            actionSelectWithTarget: 'Select "{value}" in {target}',
+            actionSelectTargetOnly: 'Select in {target}',
             actionClickElement: 'Click element',
             actionInputShort: 'Type',
             actionSelectShort: 'Select',
             actionNavigate: 'Navigate',
             clickPointScreenshot: 'Step {step} Screenshot',
             startNeedKey: 'Set API Key First',
-            startNeedMic: 'Grant Microphone First',
+            startNeedMic: 'Enable Microphone Access',
             startProviderUnsupported: 'Selected provider is not supported yet',
             initStt: 'Initializing speech recognition…',
             toastWsDisconnected: 'Speech connection disconnected. Pause and resume to reconnect.',
@@ -401,6 +409,7 @@
     let aliyunAudioCtx = null;
     let aliyunAudioSource = null;
     let aliyunAudioProcessor = null;
+    let aliyunAudioProcessorMode = '';
     let aliyunAudioSink = null;
     let sttStream = null;
     let sttLastFailure = '';
@@ -734,8 +743,15 @@
     function stopAliyunPcmCapture() {
         if (aliyunAudioProcessor) {
             try { aliyunAudioProcessor.disconnect(); } catch { /* noop */ }
-            aliyunAudioProcessor.onaudioprocess = null;
+            if ('onaudioprocess' in aliyunAudioProcessor) {
+                aliyunAudioProcessor.onaudioprocess = null;
+            }
+            if (aliyunAudioProcessor.port) {
+                try { aliyunAudioProcessor.port.onmessage = null; } catch { /* noop */ }
+                try { aliyunAudioProcessor.port.close(); } catch { /* noop */ }
+            }
             aliyunAudioProcessor = null;
+            aliyunAudioProcessorMode = '';
         }
         if (aliyunAudioSource) {
             try { aliyunAudioSource.disconnect(); } catch { /* noop */ }
@@ -749,6 +765,32 @@
             aliyunAudioCtx.close().catch(() => { });
             aliyunAudioCtx = null;
         }
+    }
+
+    function appendAliyunPcmChunk(socket, inRate, float32Samples) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        if (!(float32Samples instanceof Float32Array) || float32Samples.length === 0) return;
+        const mono = downsampleFloat32(float32Samples, inRate, 16000);
+        if (!mono || mono.length === 0) return;
+        const pcm16 = float32ToPcm16Bytes(mono);
+        if (!pcm16.byteLength) return;
+        try {
+            const audio = arrayBufferToBase64(pcm16.buffer);
+            socket.send(JSON.stringify({ type: 'input_audio_buffer.append', audio }));
+        } catch (e) {
+            console.warn('Aliyun PCM append failed:', String(e?.message || e || ''));
+        }
+    }
+
+    function formatAliyunRealtimeError(msg) {
+        const error = msg?.error || {};
+        return {
+            type: String(error?.type || msg?.type || '').trim(),
+            code: String(error?.code || '').trim(),
+            message: String(error?.message || '').trim(),
+            param: String(error?.param || '').trim(),
+            eventId: String(error?.event_id || msg?.event_id || '').trim()
+        };
     }
 
     async function startAliyunPcmCapture(stream, socket) {
@@ -767,30 +809,50 @@
 
         const inRate = aliyunAudioCtx.sampleRate || 48000;
         aliyunAudioSource = aliyunAudioCtx.createMediaStreamSource(stream);
-        aliyunAudioProcessor = aliyunAudioCtx.createScriptProcessor(4096, 1, 1);
         aliyunAudioSink = aliyunAudioCtx.createGain();
         aliyunAudioSink.gain.value = 0;
 
-        aliyunAudioSource.connect(aliyunAudioProcessor);
-        aliyunAudioProcessor.connect(aliyunAudioSink);
-        aliyunAudioSink.connect(aliyunAudioCtx.destination);
-
-        aliyunAudioProcessor.onaudioprocess = (event) => {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-            const input = event.inputBuffer.getChannelData(0);
-            const mono = downsampleFloat32(input, inRate, 16000);
-            if (!mono || mono.length === 0) return;
-            const pcm16 = float32ToPcm16Bytes(mono);
-            if (!pcm16.byteLength) return;
+        const supportsAudioWorklet = Boolean(aliyunAudioCtx.audioWorklet?.addModule && window.AudioWorkletNode);
+        if (supportsAudioWorklet) {
             try {
-                const audio = arrayBufferToBase64(pcm16.buffer);
-                socket.send(JSON.stringify({ type: 'input_audio_buffer.append', audio }));
+                await aliyunAudioCtx.audioWorklet.addModule(chrome.runtime.getURL('aliyun-pcm-worklet.js'));
+                aliyunAudioProcessor = new AudioWorkletNode(aliyunAudioCtx, 'aliyun-pcm-capture', {
+                    numberOfInputs: 1,
+                    numberOfOutputs: 1,
+                    outputChannelCount: [1],
+                    channelCount: 1,
+                    channelCountMode: 'explicit',
+                    processorOptions: {
+                        frameSize: 4096
+                    }
+                });
+                aliyunAudioProcessor.port.onmessage = (event) => {
+                    const buffer = event?.data;
+                    if (!(buffer instanceof ArrayBuffer)) return;
+                    appendAliyunPcmChunk(socket, inRate, new Float32Array(buffer));
+                };
+                aliyunAudioSource.connect(aliyunAudioProcessor);
+                aliyunAudioProcessor.connect(aliyunAudioSink);
+                aliyunAudioSink.connect(aliyunAudioCtx.destination);
+                aliyunAudioProcessorMode = 'audio-worklet';
             } catch (e) {
-                console.warn('Aliyun PCM append failed:', String(e?.message || e || ''));
+                console.warn('Aliyun AudioWorklet init failed, falling back to ScriptProcessorNode:', String(e?.message || e || ''));
             }
-        };
+        }
+
+        if (!aliyunAudioProcessor) {
+            aliyunAudioProcessor = aliyunAudioCtx.createScriptProcessor(4096, 1, 1);
+            aliyunAudioSource.connect(aliyunAudioProcessor);
+            aliyunAudioProcessor.connect(aliyunAudioSink);
+            aliyunAudioSink.connect(aliyunAudioCtx.destination);
+            aliyunAudioProcessor.onaudioprocess = (event) => {
+                appendAliyunPcmChunk(socket, inRate, event.inputBuffer.getChannelData(0));
+            };
+            aliyunAudioProcessorMode = 'script-processor';
+        }
 
         console.info('Aliyun PCM capture started:', {
+            mode: aliyunAudioProcessorMode || 'unknown',
             inputSampleRate: inRate,
             outputSampleRate: 16000
         });
@@ -1115,8 +1177,14 @@
                             }
                             return;
                         }
+                        if (type === 'session.finished') {
+                            if (sttSocket?.__onvordExpectedClose && sttSocket.readyState === WebSocket.OPEN) {
+                                try { sttSocket.close(1000, 'client-stop'); } catch { /* noop */ }
+                            }
+                            return;
+                        }
                         if (type === 'error') {
-                            console.error('Aliyun realtime error message:', msg);
+                            console.error('Aliyun realtime error:', formatAliyunRealtimeError(msg), msg);
                             return;
                         }
                         const transcript = extractAliyunTranscript(msg);
@@ -1252,15 +1320,17 @@
                         }
                     }, 220);
                 } else if (sttEngine === STT_PROVIDER.ALIYUN) {
-                    try { ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' })); } catch { /* noop */ }
-                    if (sttEngine === STT_PROVIDER.ALIYUN) {
-                        try { ws.send(JSON.stringify({ type: 'response.create' })); } catch { /* noop */ }
-                    }
+                    try {
+                        ws.send(JSON.stringify({
+                            event_id: `event_${Date.now()}`,
+                            type: 'session.finish'
+                        }));
+                    } catch { /* noop */ }
                     setTimeout(() => {
                         if (ws.readyState === WebSocket.OPEN) {
                             try { ws.close(1000, 'client-stop'); } catch { /* noop */ }
                         }
-                    }, 180);
+                    }, 1200);
                 } else {
                     try { ws.close(1000, 'client-stop'); } catch { /* noop */ }
                 }
@@ -1575,16 +1645,8 @@
         clearPlaceholder();
 
         const icon = evIcon(ev.actionType);
-        let label = '';
-        switch (ev.actionType) {
-            case 'click': label = t('actionClick', { target: ev.target?.description || t('elementFallback') }); break;
-            case 'input': label = t('actionInput', { value: (ev.value || '').substring(0, 15) }); break;
-            case 'navigate': case 'navigation': label = ev.pageTitle || t('pageFallback'); break;
-            case 'scroll': label = t('actionScroll'); break;
-            case 'select': label = t('actionSelect', { value: (ev.value || '').substring(0, 15) }); break;
-            case 'keypress': label = ev.key || ev.value || t('keypressFallback'); break;
-            default: label = ev.actionType;
-        }
+        const fullLabel = describeAction(ev, ev.actionType);
+        const label = compactLabel(fullLabel, 26) || fullLabel || ev.actionType;
 
         // For input events, update the last input pill instead of creating a new one
         if (ev.actionType === 'input') {
@@ -1595,9 +1657,9 @@
                     lastPill.classList.add('ev-pill-preview');
                     if (ev.timestamp != null) lastPill.setAttribute('data-ts', String(ev.timestamp));
                     setPillText(lastPill, `${icon} ${label}`);
-                    lastPill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${label}`);
+                    lastPill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${fullLabel}`);
                     const shot = getInlineScreenshotSrc(ev);
-                    if (shot) upsertPillThumb(lastPill, shot, `${fmtTime(ev.timestamp)} — ${label}`);
+                    if (shot) upsertPillThumb(lastPill, shot, `${fmtTime(ev.timestamp)} — ${fullLabel}`);
                     return; // Updated in place, no new pill needed
                 }
             }
@@ -1626,10 +1688,10 @@
         pill.className = 'ev-pill ev-pill-preview';
         pill.setAttribute('data-type', ev.actionType);
         if (ev.timestamp != null) pill.setAttribute('data-ts', String(ev.timestamp));
-        pill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${label}`);
+        pill.setAttribute('title', `${fmtTime(ev.timestamp)} — ${fullLabel}`);
         setPillText(pill, `${icon} ${label}`);
         const shot = getInlineScreenshotSrc(ev);
-        if (shot) upsertPillThumb(pill, shot, `${fmtTime(ev.timestamp)} — ${label}`);
+        if (shot) upsertPillThumb(pill, shot, `${fmtTime(ev.timestamp)} — ${fullLabel}`);
 
         const last = getLastTimelineItem();
         if (last && last.classList.contains('tl-actions')) {
@@ -1651,28 +1713,52 @@
         return t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
     }
 
-    function getPreviewActionLabel(step) {
-        const action = step?.action || {};
-        const type = action.type || '';
-        const rawDesc = normalizeNarrationText(action.description || '');
-        if (rawDesc) return compactLabel(rawDesc, 26);
+    function describeAction(action, fallback = '') {
+        const type = normalizeActionTypeForExport(action?.type || action?.actionType || '');
+        const target = normalizeNarrationText(action?.target?.description || '');
+        const targetTag = normalizeNarrationText(action?.target?.tag || '').toLowerCase();
+        const value = normalizeNarrationText(action?.value || '');
+        const pageTitle = normalizeNarrationText(action?.pageTitle || action?.page_title || action?.url || '');
 
         switch (type) {
-            case 'click': return t('actionClickElement');
-            case 'input': return compactLabel(t('actionInput', { value: action.value || '' }), 22) || t('actionInputShort');
+            case 'click':
+                return target ? t('actionClick', { target }) : (fallback || t('actionClickElement'));
+            case 'input':
+                if (target && value) return t('actionInputWithTarget', { target, value });
+                if (value) return t('actionInput', { value });
+                if (target) return t('actionInputTargetOnly', { target });
+                return fallback || t('actionInputShort');
             case 'navigate':
-            case 'navigation': return compactLabel(action.page_title || action.url || t('actionNavigate'), 24);
-            case 'scroll': return t('actionScroll');
-            case 'select': return compactLabel(t('actionSelect', { value: action.value || '' }), 22) || t('actionSelectShort');
-            case 'keypress': return compactLabel(action.key || action.value || t('keypressFallback'), 18);
-            default: return compactLabel(type || t('actionFallback'), 22);
+            case 'navigation':
+                return pageTitle || fallback || t('actionNavigate');
+            case 'scroll':
+                return fallback || t('actionScroll');
+            case 'select':
+                if (targetTag === 'select') {
+                    if (target && value) return t('actionSelectWithTarget', { target, value });
+                    if (target) return t('actionSelectTargetOnly', { target });
+                }
+                if (value) return t('actionSelect', { value });
+                if (target) return t('actionSelectTargetOnly', { target });
+                return fallback || t('actionSelectShort');
+            case 'keypress':
+                return normalizeNarrationText(action?.key || action?.value || '') || fallback || t('keypressFallback');
+            default:
+                return fallback || normalizeNarrationText(action?.description || '') || type || t('actionFallback');
         }
+    }
+
+    function getPreviewActionLabel(step) {
+        const action = step?.action || {};
+        const desc = describeAction(action, normalizeNarrationText(action.description || ''));
+        return compactLabel(desc, 26) || t('actionFallback');
     }
 
     function createPreviewPill(step) {
         const action = step?.action || {};
         const actionType = action.type || 'action';
-        const label = getPreviewActionLabel(step);
+        const fullLabel = describeAction(action, normalizeNarrationText(action.description || ''));
+        const label = compactLabel(fullLabel, 26) || getPreviewActionLabel(step);
         const icon = evIcon(actionType);
 
         const pill = document.createElement('span');
@@ -1680,7 +1766,7 @@
         pill.setAttribute('data-type', actionType);
         if (step?.timestampMs != null) pill.setAttribute('data-ts', String(step.timestampMs));
         const ts = step?.timestamp || '';
-        pill.setAttribute('title', `${ts ? `${ts} — ` : ''}${label}`);
+        pill.setAttribute('title', `${ts ? `${ts} — ` : ''}${fullLabel || label}`);
         setPillText(pill, `${icon} ${label}`);
         const safeImage = normalizeImageSrc(step?.screenshot);
         if (safeImage) upsertPillThumb(pill, safeImage, t('clickPointScreenshot', { step: step?.stepNumber || '' }));
@@ -1752,16 +1838,32 @@
     }
 
     /* ── Actions ── */
+    let startButtonMode = 'record';
+
+    function setStartButtonMode(mode) {
+        startButtonMode = mode || 'record';
+        btnStart.dataset.mode = startButtonMode;
+    }
+
     function disableStartButton(msg) {
+        setStartButtonMode('disabled');
         btnStart.disabled = true;
         btnStart.classList.add('btn-disabled');
         btnStart.innerHTML = '<span class="bi">⏺</span>' + msg;
     }
 
     function enableStartButton() {
+        setStartButtonMode('record');
         btnStart.disabled = false;
         btnStart.classList.remove('btn-disabled');
         btnStart.innerHTML = `<span class="bi">⏺</span>${t('startRecording')}`;
+    }
+
+    function showMicPermissionButton() {
+        setStartButtonMode('mic-permission');
+        btnStart.disabled = false;
+        btnStart.classList.remove('btn-disabled');
+        btnStart.innerHTML = `<span class="bi">🎙</span>${t('startNeedMic')}`;
     }
 
     function setPauseButton(paused) {
@@ -1801,10 +1903,19 @@
             micPermissionState = res.state;
         } catch { /* noop */ }
         if (micPermissionState !== 'granted') {
-            disableStartButton(t('startNeedMic'));
+            showMicPermissionButton();
             return;
         }
         enableStartButton();
+    }
+
+    async function handleStartClick() {
+        if (startButtonMode === 'mic-permission') {
+            openMicPermissionGuide();
+            return;
+        }
+        if (startButtonMode === 'disabled') return;
+        await doStart();
     }
 
     let _starting = false;
@@ -1823,7 +1934,7 @@
                     disableStartButton(t('startNeedKey'));
                     toast(t('toastNeedSetupKey'));
                 } else if (sttLastFailure === 'mic-denied') {
-                    enableStartButton();
+                    showMicPermissionButton();
                     toast(t('toastMicDenied'));
                     openMicPermissionGuide();
                 } else if (sttLastFailure === 'no-mic-device') {
@@ -2263,13 +2374,16 @@
                 const type = normalizeActionTypeForExport(pill.getAttribute('data-type') || 'action');
                 const ts = Number(pill.getAttribute('data-ts'));
                 const matchedStep = consumeStepForExport(stepLookup, ts, type);
-                const label = getPillExportLabel(pill, matchedStep?.action?.description || type || t('actionFallback'));
+                const pillLabel = getPillExportLabel(pill, matchedStep?.action?.description || type || t('actionFallback'));
                 const inlineShot = normalizeImageSrc(pill.querySelector('.ev-thumb-btn')?.getAttribute('data-full-src') || '');
                 const stepShot = normalizeImageSrc(matchedStep?.screenshot || matchedStep?.action?.screenshot_base64 || '');
                 const screenshot = inlineShot || stepShot || '';
                 const timestampMs = Number.isFinite(ts)
                     ? ts
                     : (Number.isFinite(Number(matchedStep?.timestampMs)) ? Number(matchedStep.timestampMs) : null);
+                const description = matchedStep?.action
+                    ? describeAction(matchedStep.action, normalizeNarrationText(matchedStep.action.description || pillLabel))
+                    : pillLabel;
 
                 segSteps.push({
                     stepNumber: ++exportStepNumber,
@@ -2278,7 +2392,7 @@
                     action: {
                         ...(matchedStep?.action || {}),
                         type: matchedStep?.action?.type || type || 'action',
-                        description: label
+                        description
                     },
                     screenshot,
                     narration: ''
@@ -2348,7 +2462,7 @@
     const btnExport = $('btn-export');
     const linkSettings = $('link-settings');
     applyUiLocale();
-    btnStart.addEventListener('click', doStart);
+    btnStart.addEventListener('click', handleStartClick);
     btnStop.addEventListener('click', doStop);
     btnPause?.addEventListener('click', doTogglePause);
     btnExport.addEventListener('click', doCopySOP);
