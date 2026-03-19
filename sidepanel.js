@@ -11,18 +11,41 @@
     let analyser = null;
     let micStream = null;
     let volAnimId = null;
+    let llmEnabled = false;
+    let currentNarrationDraftId = '';
+    let currentNarrationDraftMap = new Map();
+    let activeNarrationSegmentIndex = null;
+    let narrationDraftPersistTimer = 0;
 
     /* ── DOM refs ── */
     const $ = id => document.getElementById(id);
     const views = { idle: $('view-idle'), recording: $('view-recording') };
     const btnStart = $('btn-start'), btnStop = $('btn-stop');
+    const btnStartManual = $('btn-start-manual');
     const btnPause = $('btn-pause');
+    const btnExport = $('btn-export');
+    const btnRefineCopy = $('btn-refine-copy');
     const btnRedo = $('btn-redo');
     const btnDownload = $('btn-download');
+    const linkSettings = $('link-settings');
     const recTimer = $('rec-timer'), voiceBox = $('voice-box');
     const recBarEl = document.querySelector('#view-recording .rec-bar');
+    const liveSectionEl = document.querySelector('#view-recording .section.grow');
     const recActionsEl = $('rec-actions');
     const previewActionsEl = $('preview-actions');
+    const previewEditorKickerEl = previewActionsEl?.querySelector('.preview-editor-kicker');
+    const previewEditorTitleEl = previewActionsEl?.querySelector('.preview-editor-title');
+    const previewEditorDescEl = previewActionsEl?.querySelector('.preview-editor-desc');
+    const btnCopyFull = previewActionsEl?.querySelector('.preview-btn-copy-full');
+    const btnResetNarration = previewActionsEl?.querySelector('.preview-btn-reset');
+    const previewLocatorPaneTitleEl = previewActionsEl?.querySelector('.preview-locator .preview-pane-title');
+    const previewLocatorPaneMetaEl = previewActionsEl?.querySelector('.preview-locator .preview-pane-meta');
+    const previewEditorPaneTitleEl = previewActionsEl?.querySelector('.preview-editor .preview-pane-title');
+    const previewEditorPaneMetaEl = previewActionsEl?.querySelector('.preview-editor .preview-pane-meta');
+    const previewLocatorListEl = $('preview-locator-list');
+    const previewNarrationCardsEl = $('preview-narration-cards');
+    const previewLocatorEmptyEl = $('preview-locator-empty');
+    const previewEditorEmptyEl = $('preview-editor-empty');
     const recLabelEl = $('rec-label');
     const evList = $('ev-list'), evCountBadge = $('ev-count');
     const imgViewerEl = $('img-viewer');
@@ -30,8 +53,16 @@
     const imgViewerImgEl = $('img-viewer-img');
     const toastEl = $('toast');
     const micStatusEl = $('mic-status');
+    const micIconEl = micStatusEl?.querySelector('.mic-icon');
+    const modeChipEl = $('mode-chip');
     const volIndicator = $('vol-indicator');
     const volBars = volIndicator ? Array.from(volIndicator.querySelectorAll('.vol-bar')) : [];
+    const manualComposeEl = $('manual-compose');
+    const manualComposeTitleEl = $('manual-compose-title');
+    const manualComposeHintEl = $('manual-compose-hint');
+    const manualNoteInputEl = $('manual-note-input');
+    const btnAddNote = $('btn-add-note');
+    const btnClearNote = $('btn-clear-note');
     const uiLocale = /^zh\b/i.test(navigator.language || '') ? 'zh' : 'en';
     const I18N = {
         zh: {
@@ -51,9 +82,25 @@
             stopRecording: '停止录制',
             pause: '暂停',
             resume: '继续',
-            exportSop: '复制 SOP',
+            exportSop: '复制可编辑版 SOP',
+            exportFullSop: '复制完整版 SOP',
+            resetNarration: '恢复原讲解',
+            refineCopy: 'GPT 整理后复制',
+            refiningCopy: 'GPT 整理复制中...',
             downloadFullSop: '下载完整 SOP（含截图）',
             recordAgain: '重新录制',
+            previewEditorKicker: '讲解优先编辑模式',
+            previewEditorTitle: '先改讲解，再复制给 AI',
+            previewEditorDesc: '左侧按段定位对应操作，右侧直接逐段改写讲解内容。',
+            previewLocatorTitle: '对应步骤',
+            previewLocatorMeta: '{count} 段',
+            previewEditorPaneTitle: '讲解编辑',
+            previewEditorPaneMeta: '本地自动保存',
+            previewNarrationLabel: '讲解 {index}',
+            previewNarrationMap: '对应步骤 {steps}',
+            previewNoMappedSteps: '未关联步骤',
+            previewLocatorEmpty: '当前录制没有可编辑的讲解段。',
+            previewEditorEmpty: '当前录制没有讲解内容，可直接复制完整版 SOP。',
             micStatusTitle: '语音识别',
             recognizing: '识别中',
             screenshotPreview: '截图预览',
@@ -63,6 +110,8 @@
             pageFallback: '页面',
             keypressFallback: '快捷键',
             actionClick: '点击 {target}',
+            actionPoint: '标记这里',
+            actionPointWithTarget: '标记这里：{target}',
             actionInput: '输入「{value}」',
             actionInputWithTarget: '在 {target} 中输入「{value}」',
             actionInputTargetOnly: '在 {target} 中输入',
@@ -102,13 +151,21 @@
             toastResumeSttFailed: '恢复语音识别失败，请检查麦克风与语音服务凭证',
             toastResumed: '已继续录制',
             toastPauseResumeFailed: '暂停/继续失败',
-            exportSuccess: '✅ 已复制 SOP 到剪切板',
+            exportSuccess: '✅ 已复制可编辑版 SOP',
+            exportFullSuccess: '✅ 已复制完整版 SOP',
             downloadSuccess: '✅ 已下载完整 SOP',
             toastCopyFailed: '复制 SOP 失败',
+            refineCopySuccess: '✅ 已复制 GPT 润色后的 SOP',
+            toastNeedLlmSetup: '请先在设置中启用 GPT 润色，并配置接口 URL、API Key 和模型',
+            toastRefineFailed: 'GPT 润色失败',
+            toastRefineParseFailed: 'GPT 返回内容无法解析',
+            toastLlmDisabled: 'GPT 润色当前已关闭，请先到设置中开启',
+            toastNarrationReset: '已恢复原讲解并清除本地记忆',
             toastAutoStopped: '已达到录制时间上限，自动停止',
             toastRestricted: '当前页面操作暂不可录制',
             recoveryPrompt: '发现 {ago} 分钟前的录制数据（{count} 个操作块），是否恢复？',
             toastRecoverySttFailed: '语音识别恢复失败',
+            toastGenerateRecovered: '主生成未正常返回，已回退到本地 SOP',
             copySectionIntro: 'SOP 介绍',
             copySectionNotes: '说明',
             copySectionOps: '操作',
@@ -119,6 +176,8 @@
             copyFieldTime: '时间',
             copyFieldPage: '页面',
             copyNarrationTitle: '讲解',
+            copyMappedSteps: '对应步骤',
+            copyMappedOps: '对应操作',
             copyEmptyOps: '暂无操作步骤',
             exportStepAlt: '步骤{step}',
             exportAgentDetail: '执行细节（给 Agent）',
@@ -149,9 +208,25 @@
             stopRecording: 'Stop Recording',
             pause: 'Pause',
             resume: 'Resume',
-            exportSop: 'Copy SOP',
+            exportSop: 'Copy Editable SOP',
+            exportFullSop: 'Copy Full SOP',
+            resetNarration: 'Restore Narration',
+            refineCopy: 'GPT Refine & Copy',
+            refiningCopy: 'Refining for Copy...',
             downloadFullSop: 'Download Full SOP',
             recordAgain: 'Record Again',
+            previewEditorKicker: 'NARRATION-FIRST EDIT MODE',
+            previewEditorTitle: 'Edit narration first, then copy for AI',
+            previewEditorDesc: 'Left side helps you locate mapped steps. Right side is for fast narration rewriting.',
+            previewLocatorTitle: 'Mapped Steps',
+            previewLocatorMeta: '{count} segments',
+            previewEditorPaneTitle: 'Narration Editor',
+            previewEditorPaneMeta: 'Auto saved locally',
+            previewNarrationLabel: 'Narration {index}',
+            previewNarrationMap: 'Mapped to steps {steps}',
+            previewNoMappedSteps: 'No mapped steps',
+            previewLocatorEmpty: 'No editable narration segments yet.',
+            previewEditorEmpty: 'No narration to edit for this recording. You can still copy the full SOP.',
             micStatusTitle: 'Speech Recognition',
             recognizing: 'Recognizing',
             screenshotPreview: 'Screenshot Preview',
@@ -161,6 +236,8 @@
             pageFallback: 'Page',
             keypressFallback: 'Shortcut',
             actionClick: 'Click {target}',
+            actionPoint: 'Mark here',
+            actionPointWithTarget: 'Mark here: {target}',
             actionInput: 'Type "{value}"',
             actionInputWithTarget: 'Type "{value}" in {target}',
             actionInputTargetOnly: 'Type in {target}',
@@ -200,13 +277,21 @@
             toastResumeSttFailed: 'Failed to resume speech recognition. Check microphone and provider credentials',
             toastResumed: 'Recording resumed',
             toastPauseResumeFailed: 'Pause/Resume failed',
-            exportSuccess: '✅ SOP copied to clipboard',
+            exportSuccess: '✅ Editable SOP copied to clipboard',
+            exportFullSuccess: '✅ Full SOP copied to clipboard',
             downloadSuccess: '✅ Full SOP downloaded',
             toastCopyFailed: 'Failed to copy SOP',
+            refineCopySuccess: 'GPT-refined SOP copied to clipboard',
+            toastNeedLlmSetup: 'Configure the GPT endpoint URL, API key, and model in settings first',
+            toastRefineFailed: 'GPT refinement failed',
+            toastRefineParseFailed: 'GPT response could not be parsed',
+            toastLlmDisabled: 'GPT refinement is disabled. Turn it on in settings first',
+            toastNarrationReset: 'Narration restored and local memory cleared',
             toastAutoStopped: 'Recording time limit reached. Stopped automatically',
             toastRestricted: 'Recording is unavailable on this page',
             recoveryPrompt: 'Found recording data from {ago} minutes ago ({count} action groups). Restore?',
             toastRecoverySttFailed: 'Failed to recover speech recognition',
+            toastGenerateRecovered: 'Primary stop did not return. Recovered the local SOP instead',
             copySectionIntro: 'SOP Overview',
             copySectionNotes: 'Notes',
             copySectionOps: 'Operations',
@@ -217,6 +302,8 @@
             copyFieldTime: 'Time',
             copyFieldPage: 'Page',
             copyNarrationTitle: 'Narration',
+            copyMappedSteps: 'Mapped Steps',
+            copyMappedOps: 'Mapped Operations',
             copyEmptyOps: 'No action steps',
             exportStepAlt: 'Step {step}',
             exportAgentDetail: 'Execution Details (For Agent)',
@@ -232,6 +319,50 @@
         }
     };
 
+    Object.assign(I18N.zh, {
+        startManual: '开始说明',
+        manualModeChip: '文字说明',
+        manualModeTitle: '文字说明',
+        manualModeHint: '先操作，再用文字补充你刚刚做了什么、目的是什么。按 Ctrl+Enter 可快速加入。',
+        manualModePlaceholder: '输入这一步的说明，让 AI 更容易理解你的意图和要求',
+        manualAdd: '加入说明',
+        manualClear: '清空',
+        manualBadgeTitle: '文字说明模式',
+        manualNoteEmpty: '请输入说明内容',
+        manualNoteAdded: '说明已加入时间线',
+        recRecordingManual: '文字说明中'
+    });
+    Object.assign(I18N.en, {
+        startManual: 'Start Typing Notes',
+        manualModeChip: 'Typing',
+        manualModeTitle: 'Type Explanation',
+        manualModeHint: 'Operate first, then type what you did and why. Press Ctrl+Enter to add it.',
+        manualModePlaceholder: 'Describe what you just did and what the AI should understand from this step',
+        manualAdd: 'Add Explanation',
+        manualClear: 'Clear',
+        manualBadgeTitle: 'Typing Notes Mode',
+        manualNoteEmpty: 'Type an explanation first',
+        manualNoteAdded: 'Explanation added to timeline',
+        recRecordingManual: 'Typing Notes'
+    });
+
+    Object.assign(I18N.zh, {
+        startManual: '开始说明',
+        manualModeChip: '文字说明',
+        manualModeTitle: '文字说明',
+        manualModeHint: '先操作，再用文字补充你刚刚做了什么、目的是什么。按 Enter 加入，Shift+Enter 换行。',
+        manualModePlaceholder: '输入这一步的说明，让 AI 更容易理解你的意图和要求',
+        manualAdd: '加入说明',
+        manualClear: '清空',
+        manualBadgeTitle: '文字说明模式',
+        manualNoteEmpty: '请输入说明内容',
+        manualNoteAdded: '说明已加入时间线',
+        recRecordingManual: '文字说明中'
+    });
+    Object.assign(I18N.en, {
+        manualModeHint: 'Operate first, then type what you did and why. Press Enter to add it, or Shift+Enter for a new line.'
+    });
+
     function t(key, vars = {}) {
         const table = I18N[uiLocale] || I18N.en;
         let text = table[key] || I18N.en[key] || key;
@@ -246,6 +377,46 @@
         if (el) el.textContent = text;
     }
 
+    function isManualMode() {
+        return recordingMode === 'text';
+    }
+
+    function recordingElapsedMs() {
+        return Math.max(0, Date.now() - startTime - pausedDuration);
+    }
+
+    function syncNarrationModeUi() {
+        const manual = isManualMode();
+        const showManualComposer = manual && currentView === 'recording' && recordingLayoutMode !== 'preview';
+        const canEditManual = showManualComposer && !isPaused;
+
+        manualComposeEl?.classList.toggle('hidden', !showManualComposer);
+        if (manualNoteInputEl) manualNoteInputEl.disabled = !canEditManual;
+        if (btnAddNote) btnAddNote.disabled = !canEditManual;
+        if (btnClearNote) btnClearNote.disabled = !showManualComposer;
+
+        if (micStatusEl) {
+            micStatusEl.classList.toggle('manual', manual);
+            micStatusEl.setAttribute('title', manual ? t('manualBadgeTitle') : t('micStatusTitle'));
+        }
+        if (micIconEl) micIconEl.textContent = manual ? '⌨️' : '🎙️';
+        if (modeChipEl) {
+            modeChipEl.textContent = t('manualModeChip');
+            modeChipEl.classList.toggle('hidden', !manual);
+        }
+        volIndicator?.classList.toggle('hidden', manual);
+        if (manualComposeTitleEl) manualComposeTitleEl.textContent = t('manualModeTitle');
+        if (manualComposeHintEl) manualComposeHintEl.textContent = t('manualModeHint');
+        if (manualNoteInputEl) manualNoteInputEl.placeholder = t('manualModePlaceholder');
+        if (btnAddNote) btnAddNote.textContent = t('manualAdd');
+        if (btnClearNote) btnClearNote.textContent = t('manualClear');
+        if (recLabelEl && currentView === 'recording' && recordingLayoutMode !== 'preview') {
+            recLabelEl.textContent = isPaused
+                ? t('recPaused')
+                : (manual ? t('recRecordingManual') : t('recRecording'));
+        }
+    }
+
     function applyUiLocale() {
         document.documentElement.lang = uiLocale === 'zh' ? 'zh-CN' : 'en';
         const tagline = $('tagline');
@@ -255,18 +426,348 @@
         setText('inst-3', t('inst3'));
         setText('inst-4', t('inst4'));
         setText('link-settings', t('settingsLink'));
+        setText('btn-start-manual', t('startManual'));
         setText('sec-title-text', t('sectionActionLog'));
         setText('timeline-placeholder', t('waitingPlaceholder'));
-        micStatusEl?.setAttribute('title', t('micStatusTitle'));
         imgViewerCloseEl?.setAttribute('aria-label', t('screenshotPreview'));
         if (imgViewerImgEl) imgViewerImgEl.alt = t('screenshotPreview');
         enableStartButton();
         setPauseButton(false);
         if (btnStop) btnStop.innerHTML = `<span class="bi">⏹</span>${t('stopRecording')}`;
         if (btnExport) btnExport.textContent = t('exportSop');
+        if (btnCopyFull) btnCopyFull.textContent = t('exportFullSop');
+        if (btnResetNarration) btnResetNarration.textContent = t('resetNarration');
+        if (btnRefineCopy) btnRefineCopy.textContent = t('refineCopy');
         if (btnDownload) btnDownload.textContent = t('downloadFullSop');
         if (btnRedo) btnRedo.textContent = t('recordAgain');
-        if (recLabelEl) recLabelEl.textContent = t('recRecording');
+        if (previewEditorKickerEl) previewEditorKickerEl.textContent = t('previewEditorKicker');
+        if (previewEditorTitleEl) previewEditorTitleEl.textContent = t('previewEditorTitle');
+        if (previewEditorDescEl) previewEditorDescEl.textContent = t('previewEditorDesc');
+        if (previewLocatorPaneTitleEl) previewLocatorPaneTitleEl.textContent = t('previewLocatorTitle');
+        if (previewLocatorPaneMetaEl) previewLocatorPaneMetaEl.textContent = t('previewLocatorMeta', { count: 0 });
+        if (previewEditorPaneTitleEl) previewEditorPaneTitleEl.textContent = t('previewEditorPaneTitle');
+        if (previewEditorPaneMetaEl) previewEditorPaneMetaEl.textContent = t('previewEditorPaneMeta');
+        if (previewLocatorEmptyEl) previewLocatorEmptyEl.textContent = t('previewLocatorEmpty');
+        if (previewEditorEmptyEl) previewEditorEmptyEl.textContent = t('previewEditorEmpty');
+        syncNarrationModeUi();
+    }
+
+    function applyLlmAvailability(enabled) {
+        llmEnabled = normalizeLlmEnabled(enabled);
+        btnRefineCopy?.classList.toggle('hidden', !llmEnabled);
+        if (btnRefineCopy) btnRefineCopy.disabled = !llmEnabled;
+    }
+
+    function normalizeNarrationDraftText(text) {
+        return String(text == null ? '' : text)
+            .replace(/\r\n/g, '\n')
+            .trim();
+    }
+
+    function hashString(text) {
+        let hash = 2166136261;
+        const value = String(text || '');
+        for (let i = 0; i < value.length; i++) {
+            hash ^= value.charCodeAt(i);
+            hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+        }
+        return (hash >>> 0).toString(16);
+    }
+
+    function buildSopDraftId(sop) {
+        const stepFingerprint = (Array.isArray(sop?.steps) ? sop.steps : []).map((step) => {
+            const ts = Number(step?.timestampMs);
+            const actionType = normalizeActionTypeForExport(step?.action?.type || step?.actionType || '');
+            const desc = normalizeNarrationText(step?.action?.description || '');
+            return [
+                Number.isFinite(ts) ? ts : '',
+                actionType,
+                desc
+            ].join('~');
+        }).join('|');
+        const narrationFingerprint = (Array.isArray(sop?.segments) ? sop.segments : [])
+            .filter((seg) => seg?.type === 'voice')
+            .map((seg) => [
+                seg?.timeRange || '',
+                normalizeNarrationDraftText(seg?.narration || '')
+            ].join('~'))
+            .join('|');
+        const raw = [
+            sop?.startUrl || '',
+            sop?.totalSteps || 0,
+            sop?.duration || 0,
+            stepFingerprint,
+            narrationFingerprint
+        ].join('|');
+        return `sop_${hashString(raw)}`;
+    }
+
+    async function getNarrationDraftStore() {
+        const data = await new Promise((resolve) => chrome.storage.local.get([NARRATION_DRAFTS_STORAGE_KEY], resolve));
+        const store = data?.[NARRATION_DRAFTS_STORAGE_KEY];
+        return store && typeof store === 'object' ? store : {};
+    }
+
+    async function setNarrationDraftStore(store) {
+        await chrome.storage.local.set({ [NARRATION_DRAFTS_STORAGE_KEY]: store }).catch(() => { });
+    }
+
+    async function persistCurrentNarrationDrafts() {
+        if (narrationDraftPersistTimer) {
+            clearTimeout(narrationDraftPersistTimer);
+            narrationDraftPersistTimer = 0;
+        }
+        if (!currentNarrationDraftId) return;
+        const store = await getNarrationDraftStore();
+        if (!currentNarrationDraftMap.size) {
+            delete store[currentNarrationDraftId];
+            await setNarrationDraftStore(store);
+            return;
+        }
+        store[currentNarrationDraftId] = {
+            updatedAt: Date.now(),
+            title: currentSOP?.title || '',
+            items: Array.from(currentNarrationDraftMap.entries()).map(([segment_index, edited_narration]) => ({
+                segment_index,
+                edited_narration
+            }))
+        };
+        await setNarrationDraftStore(store);
+    }
+
+    function scheduleNarrationDraftPersist() {
+        if (!currentNarrationDraftId) return;
+        if (narrationDraftPersistTimer) clearTimeout(narrationDraftPersistTimer);
+        narrationDraftPersistTimer = window.setTimeout(() => {
+            persistCurrentNarrationDrafts().catch((e) => {
+                console.warn('Persist narration drafts failed:', e);
+            });
+        }, 220);
+    }
+
+    async function loadNarrationDraftsForSop(sop) {
+        currentNarrationDraftId = buildSopDraftId(sop);
+        currentNarrationDraftMap = new Map();
+        const store = await getNarrationDraftStore();
+        const items = Array.isArray(store?.[currentNarrationDraftId]?.items)
+            ? store[currentNarrationDraftId].items
+            : [];
+        for (const item of items) {
+            const segIndex = Number(item?.segment_index);
+            if (!Number.isInteger(segIndex)) continue;
+            currentNarrationDraftMap.set(segIndex, normalizeNarrationDraftText(item?.edited_narration || ''));
+        }
+    }
+
+    async function clearNarrationDraftsForCurrentSop() {
+        currentNarrationDraftMap = new Map();
+        if (!currentNarrationDraftId) return;
+        if (narrationDraftPersistTimer) {
+            clearTimeout(narrationDraftPersistTimer);
+            narrationDraftPersistTimer = 0;
+        }
+        const store = await getNarrationDraftStore();
+        delete store[currentNarrationDraftId];
+        await setNarrationDraftStore(store);
+    }
+
+    function getNarrationOverrideText(overrides, segIndex, fallbackText = '') {
+        if (!(overrides instanceof Map)) return fallbackText;
+        return overrides.has(segIndex)
+            ? String(overrides.get(segIndex) ?? '')
+            : fallbackText;
+    }
+
+    function formatStepRange(stepNumbers) {
+        const numbers = Array.from(new Set((Array.isArray(stepNumbers) ? stepNumbers : [])
+            .map((n) => Number(n))
+            .filter(Number.isFinite)))
+            .sort((a, b) => a - b);
+        if (!numbers.length) return t('previewNoMappedSteps');
+        const ranges = [];
+        let start = numbers[0];
+        let end = numbers[0];
+        for (let i = 1; i < numbers.length; i++) {
+            const current = numbers[i];
+            if (current === end + 1) {
+                end = current;
+                continue;
+            }
+            ranges.push(start === end ? `${start}` : `${start}-${end}`);
+            start = current;
+            end = current;
+        }
+        ranges.push(start === end ? `${start}` : `${start}-${end}`);
+        return ranges.join(', ');
+    }
+
+    function summarizeStepsForLocator(steps) {
+        const summary = (steps || []).map((step) => {
+            const desc = normalizeNarrationText(step?.action?.description || step?.action?.type || t('actionFallback'));
+            const no = Number(step?.stepNumber);
+            return Number.isFinite(no) ? `${no}. ${desc}` : desc;
+        }).filter(Boolean);
+        return summary.join(' · ');
+    }
+
+    function autoResizeNarrationTextarea(textarea) {
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.max(textarea.scrollHeight, 120)}px`;
+    }
+
+    function buildNarrationEditorModel(sop, overrides = currentNarrationDraftMap) {
+        const { segments, totalSteps } = getExportPresentation(sop);
+        const items = [];
+        let displayIndex = 0;
+
+        segments.forEach((seg, segIndex) => {
+            const originalNarration = normalizeNarrationDraftText(seg?.narration || '');
+            const overrideText = getNarrationOverrideText(overrides, segIndex, originalNarration);
+            const isVoice = seg?.type === 'voice' && (isMeaningfulNarration(originalNarration) || overrides.has(segIndex));
+            if (!isVoice) return;
+
+            displayIndex += 1;
+            const stepNumbers = (seg?.steps || [])
+                .map((step) => Number(step?.stepNumber))
+                .filter(Number.isFinite);
+            items.push({
+                segmentIndex: segIndex,
+                displayIndex,
+                label: t('previewNarrationLabel', { index: String(displayIndex).padStart(2, '0') }),
+                stepNumbers,
+                stepRangeText: formatStepRange(stepNumbers),
+                stepSummary: summarizeStepsForLocator(seg?.steps || []),
+                originalNarration,
+                editedNarration: overrideText,
+                steps: seg?.steps || [],
+                segment: seg
+            });
+        });
+
+        return { items, totalSteps, segments };
+    }
+
+    function updatePreviewActionState(itemCount = 0) {
+        if (btnExport) btnExport.disabled = !currentSOP;
+        if (btnCopyFull) btnCopyFull.disabled = !currentSOP;
+        if (btnResetNarration) btnResetNarration.disabled = !currentSOP || !itemCount || !currentNarrationDraftMap.size;
+    }
+
+    function setActiveNarrationSegment(segmentIndex, options = {}) {
+        activeNarrationSegmentIndex = Number.isInteger(segmentIndex) ? segmentIndex : null;
+        const locatorGroups = Array.from(previewLocatorListEl?.querySelectorAll('.locator-group') || []);
+        const narrationCards = Array.from(previewNarrationCardsEl?.querySelectorAll('.narration-card') || []);
+        let activeGroup = null;
+        let activeCard = null;
+
+        locatorGroups.forEach((group) => {
+            const current = Number(group.getAttribute('data-segment-index'));
+            const isActive = current === activeNarrationSegmentIndex;
+            group.classList.toggle('locator-group-active', isActive);
+            if (isActive) activeGroup = group;
+        });
+
+        narrationCards.forEach((card) => {
+            const current = Number(card.getAttribute('data-segment-index'));
+            const isActive = current === activeNarrationSegmentIndex;
+            card.classList.toggle('narration-card-active', isActive);
+            if (isActive) activeCard = card;
+        });
+
+        if (options.scrollLocator && activeGroup) {
+            activeGroup.scrollIntoView({ block: 'nearest', behavior: options.behavior || 'smooth' });
+        }
+        if (options.scrollEditor && activeCard) {
+            activeCard.scrollIntoView({ block: 'nearest', behavior: options.behavior || 'smooth' });
+        }
+        if (options.focusEditor && activeCard) {
+            const textarea = activeCard.querySelector('.narration-textarea');
+            textarea?.focus({ preventScroll: true });
+        }
+    }
+
+    function renderNarrationEditor(sop) {
+        if (!previewLocatorListEl || !previewNarrationCardsEl || !sop) return;
+
+        const { items } = buildNarrationEditorModel(sop);
+        previewLocatorListEl.replaceChildren();
+        previewNarrationCardsEl.replaceChildren();
+
+        if (previewLocatorPaneMetaEl) previewLocatorPaneMetaEl.textContent = t('previewLocatorMeta', { count: items.length });
+        if (previewEditorPaneMetaEl) previewEditorPaneMetaEl.textContent = t('previewEditorPaneMeta');
+
+        if (!items.length) {
+            previewLocatorEmptyEl?.classList.remove('hidden');
+            previewEditorEmptyEl?.classList.remove('hidden');
+            if (previewLocatorEmptyEl) previewLocatorListEl.appendChild(previewLocatorEmptyEl);
+            if (previewEditorEmptyEl) previewNarrationCardsEl.appendChild(previewEditorEmptyEl);
+            activeNarrationSegmentIndex = null;
+            updatePreviewActionState(0);
+            return;
+        }
+
+        previewLocatorEmptyEl?.classList.add('hidden');
+        previewEditorEmptyEl?.classList.add('hidden');
+
+        items.forEach((item) => {
+            const locatorButton = document.createElement('button');
+            locatorButton.type = 'button';
+            locatorButton.className = 'locator-group';
+            locatorButton.setAttribute('data-segment-index', String(item.segmentIndex));
+            locatorButton.innerHTML = `
+                <div class="locator-group-head">
+                    <span class="locator-group-title">${escapeHtml(item.label)}</span>
+                    <span class="locator-group-map">${escapeHtml(t('previewNarrationMap', { steps: item.stepRangeText }))}</span>
+                </div>
+                <div class="locator-group-steps">${escapeHtml(item.stepSummary || t('previewNoMappedSteps'))}</div>
+            `;
+            previewLocatorListEl.appendChild(locatorButton);
+
+            const card = document.createElement('article');
+            card.className = 'narration-card';
+            card.setAttribute('data-segment-index', String(item.segmentIndex));
+
+            const head = document.createElement('div');
+            head.className = 'narration-card-head';
+            head.innerHTML = `
+                <span class="narration-card-title">${escapeHtml(item.label)}</span>
+                <span class="narration-card-map">${escapeHtml(t('previewNarrationMap', { steps: item.stepRangeText }))}</span>
+            `;
+
+            const textarea = document.createElement('textarea');
+            textarea.className = 'narration-textarea';
+            textarea.rows = 4;
+            textarea.value = item.editedNarration;
+            textarea.setAttribute('data-segment-index', String(item.segmentIndex));
+            textarea.setAttribute('data-original-narration', item.originalNarration);
+
+            card.appendChild(head);
+            card.appendChild(textarea);
+            previewNarrationCardsEl.appendChild(card);
+            autoResizeNarrationTextarea(textarea);
+        });
+
+        const preferredActive = items.some((item) => item.segmentIndex === activeNarrationSegmentIndex)
+            ? activeNarrationSegmentIndex
+            : items[0].segmentIndex;
+        setActiveNarrationSegment(preferredActive, { behavior: 'auto' });
+        updatePreviewActionState(items.length);
+    }
+
+    function getCurrentNarrationOverrides() {
+        return new Map(currentNarrationDraftMap);
+    }
+
+    async function maybeRestoreDraftPreview() {
+        const store = await getNarrationDraftStore();
+        if (!Object.keys(store).length) return false;
+        const sop = await requestSopFallback();
+        if (!sop) return false;
+        const draftId = buildSopDraftId(sop);
+        if (!store[draftId]) return false;
+        showSopPreview(sop);
+        return true;
     }
 
     /* ── Helpers ── */
@@ -276,6 +777,7 @@
             if (!el) return;
             el.classList.toggle('active', k === v);
         });
+        syncNarrationModeUi();
     }
     function fmtTime(ms) { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
     function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('show'); setTimeout(() => toastEl.classList.remove('show'), 2000); }
@@ -324,13 +826,95 @@
         }
     }
 
+    function showSopPreview(sop) {
+        if (narrationDraftPersistTimer) {
+            clearTimeout(narrationDraftPersistTimer);
+            narrationDraftPersistTimer = 0;
+        }
+        currentSOP = sop;
+        applySopScreenshotsToCurrentTimeline(sop);
+        renderSOP(sop);
+        switchView('recording');
+        setRecordingLayout('preview');
+        currentNarrationDraftId = buildSopDraftId(sop);
+        currentNarrationDraftMap = new Map();
+        activeNarrationSegmentIndex = null;
+        previewLocatorListEl?.replaceChildren();
+        previewNarrationCardsEl?.replaceChildren();
+        updatePreviewActionState(0);
+        loadNarrationDraftsForSop(sop)
+            .catch((e) => {
+                console.warn('Load narration drafts failed:', e);
+            })
+            .finally(() => {
+                if (currentSOP !== sop) return;
+                renderNarrationEditor(sop);
+            });
+    }
+
+    async function triggerActiveTabShiftCapture() {
+        if (currentView !== 'recording' || recordingLayoutMode === 'preview' || isPaused) return false;
+        try {
+            const res = await chrome.runtime.sendMessage({ type: 'TRIGGER_SHIFT_CAPTURE' });
+            return res?.success === true;
+        } catch (e) {
+            console.warn('Trigger active tab shift capture failed:', e);
+            return false;
+        }
+    }
+
+    async function sendRuntimeMessageWithTimeout(message, timeoutMs, timeoutCode) {
+        let timerId = 0;
+        const timeoutPromise = new Promise((_, reject) => {
+            timerId = window.setTimeout(() => reject(new Error(timeoutCode)), timeoutMs);
+        });
+        try {
+            return await Promise.race([
+                chrome.runtime.sendMessage(message),
+                timeoutPromise
+            ]);
+        } finally {
+            window.clearTimeout(timerId);
+        }
+    }
+
+    async function requestSopFallback() {
+        try {
+            const res = await sendRuntimeMessageWithTimeout({ type: 'GET_SOP' }, GET_SOP_TIMEOUT_MS, 'get-sop-timeout');
+            return res?.sop || null;
+        } catch (e) {
+            console.warn('GET_SOP fallback failed:', e);
+            return null;
+        }
+    }
+
+    async function stopRecordingWithFallback() {
+        try {
+            const res = await sendRuntimeMessageWithTimeout({ type: 'STOP_RECORDING' }, STOP_RECORDING_TIMEOUT_MS, 'stop-recording-timeout');
+            if (res?.success && res.sop) {
+                return { sop: res.sop, usedFallback: false };
+            }
+        } catch (e) {
+            console.warn('STOP_RECORDING failed:', e);
+        }
+
+        const fallbackSop = await requestSopFallback();
+        if (fallbackSop) {
+            return { sop: fallbackSop, usedFallback: true };
+        }
+        return null;
+    }
+
     let isPaused = false;
     let pausedDuration = 0;
+    let recordingMode = 'voice';
+    let recordingLayoutMode = 'live';
     const RECORDING_LIMIT_MS = 10 * 60 * 1000;
 
     function evIcon(t) {
         switch (t) {
             case 'click': return '👆';
+            case 'point': return '📌';
             case 'input': return '⌨️';
             case 'navigate': case 'navigation': return '🔗';
             case 'scroll': return '📍';
@@ -397,6 +981,16 @@
         aliyunRegion: 'cn',
         aliyunModel: 'qwen3-asr-flash-realtime'
     };
+    const LLM_SETTINGS_KEYS = ['llmEnabled', 'llmBaseUrl', 'llmApiKey', 'llmModel'];
+    const LLM_SETTINGS_DEFAULTS = {
+        llmEnabled: false,
+        llmBaseUrl: 'https://gmn.chuangzuoli.com/v1/responses',
+        llmModel: 'gpt-5.4'
+    };
+    const NARRATION_DRAFTS_STORAGE_KEY = 'sopNarrationDrafts';
+    const LLM_REQUEST_TIMEOUT_MS = 30000;
+    const STOP_RECORDING_TIMEOUT_MS = 10000;
+    const GET_SOP_TIMEOUT_MS = 3000;
     const ALIYUN_WS_AUTH_RULE_IDS = [391001, 391002, 391003];
     const ALIYUN_WS_AUTH_HOSTS = [
         'dashscope.aliyuncs.com',
@@ -631,6 +1225,38 @@
             .trim();
     }
 
+    function normalizeLlmUrl(url) {
+        let value = String(url || LLM_SETTINGS_DEFAULTS.llmBaseUrl).trim().replace(/\s+/g, '');
+        if (!value) return '';
+        if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+        try {
+            const parsed = new URL(value);
+            parsed.hash = '';
+            parsed.search = '';
+            let path = String(parsed.pathname || '').replace(/\/+$/, '');
+            if (!path || path === '/') {
+                path = '/v1/responses';
+            } else if (/\/v1$/i.test(path)) {
+                path = `${path}/responses`;
+            }
+            parsed.pathname = path;
+            return parsed.toString().replace(/\/$/, '');
+        } catch {
+            value = value.replace(/\/+$/, '');
+            if (/\/v1$/i.test(value)) return `${value}/responses`;
+            if (!/\/v1\/responses$/i.test(value) && /^https?:\/\/[^/]+$/i.test(value)) return `${value}/v1/responses`;
+            return value;
+        }
+    }
+
+    function normalizeLlmModel(model) {
+        return String(model || LLM_SETTINGS_DEFAULTS.llmModel).trim() || LLM_SETTINGS_DEFAULTS.llmModel;
+    }
+
+    function normalizeLlmEnabled(value) {
+        return value === true;
+    }
+
     async function getSttSettings() {
         const data = await new Promise(resolve => chrome.storage.local.get(STT_SETTINGS_KEYS, resolve));
         const merged = { ...STT_SETTINGS_DEFAULTS, ...(data || {}) };
@@ -641,6 +1267,16 @@
         }
         merged.deepgramKey = normalizeCredentialValue(merged.deepgramKey);
         merged.aliyunKey = normalizeCredentialValue(merged.aliyunKey);
+        return merged;
+    }
+
+    async function getLlmSettings() {
+        const data = await new Promise(resolve => chrome.storage.local.get(LLM_SETTINGS_KEYS, resolve));
+        const merged = { ...LLM_SETTINGS_DEFAULTS, ...(data || {}) };
+        merged.llmEnabled = normalizeLlmEnabled(merged.llmEnabled);
+        merged.llmBaseUrl = normalizeLlmUrl(merged.llmBaseUrl);
+        merged.llmApiKey = normalizeCredentialValue(merged.llmApiKey);
+        merged.llmModel = normalizeLlmModel(merged.llmModel);
         return merged;
     }
 
@@ -1568,6 +2204,24 @@
         evCountBadge.textContent = groups.length;
     }
 
+    function submitManualNote() {
+        if (!isManualMode() || isPaused || currentView !== 'recording') return;
+        const text = normalizeNarrationText(manualNoteInputEl?.value || '');
+        if (!isMeaningfulNarration(text)) {
+            toast(t('manualNoteEmpty'));
+            manualNoteInputEl?.focus();
+            return;
+        }
+        const ts = recordingElapsedMs();
+        chrome.runtime.sendMessage({ type: 'NARRATION_EVENT', text, timestamp: ts, isFinal: true }).catch(() => { });
+        appendNarrationToTimeline(text, ts);
+        if (manualNoteInputEl) {
+            manualNoteInputEl.value = '';
+            manualNoteInputEl.focus();
+        }
+        toast(t('manualNoteAdded'));
+    }
+
     function openImageViewer(src, altText) {
         if (!imgViewerEl || !imgViewerImgEl || !src) return;
         imgViewerImgEl.src = src;
@@ -1723,6 +2377,8 @@
         switch (type) {
             case 'click':
                 return target ? t('actionClick', { target }) : (fallback || t('actionClickElement'));
+            case 'point':
+                return target ? t('actionPointWithTarget', { target }) : (fallback || t('actionPoint'));
             case 'input':
                 if (target && value) return t('actionInputWithTarget', { target, value });
                 if (value) return t('actionInput', { value });
@@ -1774,6 +2430,156 @@
         return pill;
     }
 
+    function normalizeSegmentImages(images) {
+        const list = Array.isArray(images) ? images : [];
+        const seen = new Set();
+        const normalized = [];
+        for (const item of list) {
+            const screenshot = normalizeImageSrc(
+                typeof item === 'string'
+                    ? item
+                    : (item?.screenshot || item?.src || '')
+            );
+            if (!screenshot) continue;
+            const ts = Number(item?.timestampMs);
+            const stepNo = Number(item?.stepNumber);
+            const description = normalizeNarrationText(item?.description || '');
+            const target = item?.target ?? null;
+            const normalizedItem = {
+                screenshot,
+                timestampMs: Number.isFinite(ts) ? ts : null,
+                stepNumber: Number.isFinite(stepNo) ? stepNo : null,
+                description: description || null,
+                target
+            };
+            const key = `${normalizedItem.timestampMs == null ? '' : normalizedItem.timestampMs}|${normalizedItem.screenshot}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            normalized.push(normalizedItem);
+        }
+        return normalized;
+    }
+
+    function deriveSegmentImagesFromSteps(steps) {
+        const derived = [];
+        for (const step of (steps || [])) {
+            const type = normalizeActionTypeForExport(step?.action?.type || step?.actionType || '');
+            if (type !== 'point') continue;
+            const screenshot = normalizeImageSrc(step?.screenshot || step?.action?.screenshot_base64 || '');
+            if (!screenshot) continue;
+            const ts = Number(step?.timestampMs);
+            const stepNo = Number(step?.stepNumber);
+            const description = normalizeNarrationText(step?.action?.description || '');
+            derived.push({
+                screenshot,
+                timestampMs: Number.isFinite(ts) ? ts : null,
+                stepNumber: Number.isFinite(stepNo) ? stepNo : null,
+                description: description || null,
+                target: step?.action?.target || null
+            });
+        }
+        return normalizeSegmentImages(derived);
+    }
+
+    function mergeSegmentImages(...lists) {
+        const merged = [];
+        for (const list of lists) {
+            if (!Array.isArray(list)) continue;
+            merged.push(...list);
+        }
+        return normalizeSegmentImages(merged);
+    }
+
+    function getSegmentImages(seg) {
+        const explicit = normalizeSegmentImages(seg?.images);
+        const derived = deriveSegmentImagesFromSteps(seg?.steps || []);
+        return mergeSegmentImages(explicit, derived);
+    }
+
+    function createPreviewSegmentImages(seg) {
+        const images = getSegmentImages(seg);
+        if (!images.length) return null;
+
+        const group = document.createElement('div');
+        group.className = 'tl-seg-images';
+        group.style.display = 'flex';
+        group.style.flexDirection = 'column';
+        group.style.gap = '8px';
+        group.style.margin = '-2px 0 2px';
+
+        for (const image of images) {
+            const stepLabel = image.stepNumber != null
+                ? t('clickPointScreenshot', { step: image.stepNumber })
+                : t('screenshotPreview');
+            const altText = image.description || stepLabel;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'seg-shot-btn';
+            btn.setAttribute('data-full-src', image.screenshot);
+            btn.setAttribute('data-alt', altText);
+            if (image.timestampMs != null) btn.setAttribute('data-ts', String(image.timestampMs));
+            if (image.stepNumber != null) btn.setAttribute('data-step', String(image.stepNumber));
+            if (image.description) btn.setAttribute('data-description', image.description);
+            if (image.target != null) {
+                try {
+                    btn.setAttribute('data-target', typeof image.target === 'string' ? image.target : JSON.stringify(image.target));
+                } catch {
+                    btn.setAttribute('data-target', String(image.target));
+                }
+            }
+            btn.style.width = '100%';
+            btn.style.padding = '0';
+            btn.style.border = '1px solid #ccdeef';
+            btn.style.borderRadius = '10px';
+            btn.style.overflow = 'hidden';
+            btn.style.background = '#ffffff';
+            btn.style.cursor = 'zoom-in';
+            btn.style.boxShadow = '0 4px 10px rgba(12,27,61,0.06)';
+
+            const img = document.createElement('img');
+            img.className = 'seg-shot-img';
+            img.src = image.screenshot;
+            img.alt = '';
+            img.loading = 'lazy';
+            img.decoding = 'async';
+            img.style.display = 'block';
+            img.style.width = '100%';
+            img.style.maxHeight = '220px';
+            img.style.objectFit = 'cover';
+
+            btn.appendChild(img);
+            group.appendChild(btn);
+        }
+        return group;
+    }
+
+    function extractSegmentImagesFromNode(node) {
+        if (!node) return [];
+        const buttons = Array.from(node.querySelectorAll('.seg-shot-btn'));
+        if (!buttons.length) return [];
+        const images = buttons.map((btn) => {
+            const ts = Number(btn.getAttribute('data-ts'));
+            const stepNo = Number(btn.getAttribute('data-step'));
+            const targetRaw = btn.getAttribute('data-target') || '';
+            let parsedTarget = null;
+            if (targetRaw) {
+                try {
+                    parsedTarget = JSON.parse(targetRaw);
+                } catch {
+                    parsedTarget = targetRaw;
+                }
+            }
+            return {
+                screenshot: btn.getAttribute('data-full-src') || btn.querySelector('img')?.getAttribute('src') || '',
+                timestampMs: Number.isFinite(ts) ? ts : null,
+                stepNumber: Number.isFinite(stepNo) ? stepNo : null,
+                description: normalizeNarrationText(btn.getAttribute('data-description') || '') || null,
+                target: parsedTarget
+            };
+        });
+        return normalizeSegmentImages(images);
+    }
+
     function applySopScreenshotsToCurrentTimeline(sop) {
         if (!sop) return;
         const segs = sop.segments || [];
@@ -1816,6 +2622,8 @@
                     hdr.appendChild(tm);
                 }
                 evList.appendChild(hdr);
+                const images = createPreviewSegmentImages(seg);
+                if (images) evList.appendChild(images);
             }
 
             const steps = seg.steps || [];
@@ -1874,20 +2682,24 @@
     }
 
     function setRecordingLayout(mode) {
+        recordingLayoutMode = mode || 'live';
         const isPreview = mode === 'preview';
         const isPausedState = mode === 'paused';
         recBarEl?.classList.toggle('done', isPreview);
         recBarEl?.classList.toggle('paused', isPausedState);
+        liveSectionEl?.classList.toggle('hidden', isPreview);
         if (mode === 'preview') {
             recActionsEl?.classList.add('hidden');
             previewActionsEl?.classList.remove('hidden');
             if (recLabelEl) recLabelEl.textContent = t('recDone');
+            syncNarrationModeUi();
             return;
         }
         recActionsEl?.classList.remove('hidden');
         previewActionsEl?.classList.add('hidden');
         closeImageViewer();
         if (recLabelEl) recLabelEl.textContent = mode === 'paused' ? t('recPaused') : t('recRecording');
+        syncNarrationModeUi();
     }
 
     async function refreshStartEligibility() {
@@ -1918,12 +2730,47 @@
         await doStart();
     }
 
+    function prepareRecordingUi(mode, startTimestamp) {
+        recordingMode = mode === 'text' ? 'text' : 'voice';
+        startTime = startTimestamp;
+        isPaused = false;
+        pausedDuration = 0;
+        currentSOP = null;
+        currentNarrationDraftId = '';
+        currentNarrationDraftMap = new Map();
+        activeNarrationSegmentIndex = null;
+        if (narrationDraftPersistTimer) {
+            clearTimeout(narrationDraftPersistTimer);
+            narrationDraftPersistTimer = 0;
+        }
+        if (manualNoteInputEl) manualNoteInputEl.value = '';
+        evList.innerHTML = `<div class="placeholder">${escapeHtml(t('waitingPlaceholder'))}</div>`;
+        evCountBadge.textContent = '0';
+        updateTimerDisplay(0);
+        setPauseButton(false);
+        switchView('recording');
+        setRecordingLayout('live');
+        clearInterval(timer);
+        timer = setInterval(() => {
+            if (!isPaused) updateTimerDisplay(Date.now() - startTime - pausedDuration);
+        }, 1000);
+        syncNarrationModeUi();
+        if (recordingMode === 'text') {
+            setTimeout(() => manualNoteInputEl?.focus(), 0);
+        }
+    }
+
+    async function handleStartManualClick() {
+        await doStartManual();
+    }
+
     let _starting = false;
     async function doStart() {
         if (_starting) return;
         _starting = true;
         try {
             btnStart.disabled = true;
+            if (btnStartManual) btnStartManual.disabled = true;
             btnStart.textContent = t('initStt');
 
             // Step 1: Initialize STT — must succeed before recording
@@ -1984,21 +2831,9 @@
             }
 
             // Step 3: Start recording
-            const res = await chrome.runtime.sendMessage({ type: 'START_RECORDING' });
+            const res = await chrome.runtime.sendMessage({ type: 'START_RECORDING', mode: 'voice' });
             if (res?.success) {
-                startTime = res.startTime;
-                isPaused = false;
-                pausedDuration = 0;
-                currentSOP = null;
-                evList.innerHTML = `<div class="placeholder">${escapeHtml(t('waitingPlaceholder'))}</div>`;
-                evCountBadge.textContent = '0';
-                updateTimerDisplay(0);
-                setPauseButton(false);
-                switchView('recording');
-                setRecordingLayout('live');
-                timer = setInterval(() => {
-                    if (!isPaused) updateTimerDisplay(Date.now() - startTime - pausedDuration);
-                }, 1000);
+                prepareRecordingUi(res.recordingMode || 'voice', res.startTime);
             } else {
                 stopSTT({ flushInterim: false });
                 stopVolumeVis();
@@ -2014,6 +2849,36 @@
             toast(t('toastStartFailed'));
             enableStartButton();
         } finally {
+            if (btnStartManual) btnStartManual.disabled = false;
+            _starting = false;
+        }
+    }
+
+    async function doStartManual() {
+        if (_starting) return;
+        _starting = true;
+        try {
+            btnStart.disabled = true;
+            if (btnStartManual) btnStartManual.disabled = true;
+            stopSTT({ flushInterim: false });
+            stopVolumeVis();
+
+            const res = await chrome.runtime.sendMessage({ type: 'START_RECORDING', mode: 'text' });
+            if (res?.success) {
+                prepareRecordingUi(res.recordingMode || 'text', res.startTime);
+            } else if (res?.reason === 'restricted-page') {
+                toast(t('toastRestricted'));
+            } else {
+                toast(t('toastStartFailed'));
+            }
+
+            enableStartButton();
+        } catch (e) {
+            console.error(e);
+            toast(t('toastStartFailed'));
+            enableStartButton();
+        } finally {
+            if (btnStartManual) btnStartManual.disabled = false;
             _starting = false;
         }
     }
@@ -2026,12 +2891,10 @@
         stopVolumeVis();
         await new Promise(r => setTimeout(r, 420));
         try {
-            const res = await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
-            if (res?.success && res.sop) {
-                currentSOP = res.sop;
-                applySopScreenshotsToCurrentTimeline(res.sop);
-                switchView('recording');
-                setRecordingLayout('preview');
+            const result = await stopRecordingWithFallback();
+            if (result?.sop) {
+                showSopPreview(result.sop);
+                if (result.usedFallback) toast(t('toastGenerateRecovered'));
             }
             else { toast(t('toastGenerateFailed')); switchView('idle'); }
         } catch (e) { console.error(e); toast(t('toastGenerateError')); switchView('idle'); }
@@ -2058,15 +2921,17 @@
                 return;
             }
 
-            const sttOk = await initSTT();
-            if (!sttOk) {
-                toast(t('toastResumeSttFailed'));
-                return;
+            if (!isManualMode()) {
+                const sttOk = await initSTT();
+                if (!sttOk) {
+                    toast(t('toastResumeSttFailed'));
+                    return;
+                }
+                try {
+                    micStream = await getMicStreamForUse();
+                    startVolumeVis(micStream);
+                } catch { /* non-blocking */ }
             }
-            try {
-                micStream = await getMicStreamForUse();
-                startVolumeVis(micStream);
-            } catch { /* non-blocking */ }
             await chrome.runtime.sendMessage({ type: 'RESUME_RECORDING' });
             isPaused = false;
             setPauseButton(false);
@@ -2120,11 +2985,15 @@
         const hasTimelineSegs = timelineSegs.some(seg =>
             (seg.steps && seg.steps.length > 0) || (seg.type === 'voice' && isMeaningfulNarration(seg.narration))
         );
-        const segments = hasTimelineSegs
+        const baseSegments = hasTimelineSegs
             ? timelineSegs
             : ((Array.isArray(sop?.segments) && sop.segments.length > 0)
                 ? sop.segments
                 : [{ type: 'silent', narration: '', steps: sop?.steps || [] }]);
+        const segments = baseSegments.map((seg) => ({
+            ...seg,
+            images: getSegmentImages(seg)
+        }));
         const totalSteps = segments.reduce((sum, seg) => sum + ((seg.steps || []).length), 0);
         return { segments, totalSteps };
     }
@@ -2251,6 +3120,506 @@
         return { plainText, html };
     }
 
+    function getDefaultCopyNotesLines() {
+        return [
+            t('exportDocIntro'),
+            htmlToPlainText(t('exportHowToReadItems'))
+        ].filter(Boolean);
+    }
+
+    function normalizeCopyBlockText(value) {
+        return htmlToPlainText(String(value || ''))
+            .replace(/\r\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
+    function normalizeCopyNotesLines(lines) {
+        const normalized = Array.isArray(lines)
+            ? lines.map(normalizeCopyBlockText).filter(Boolean)
+            : [];
+        return normalized.length ? normalized : getDefaultCopyNotesLines();
+    }
+
+    function buildCopyNarrationHtml(title, narrationText, timeRange) {
+        const safeTitle = escapeHtml(title);
+        const safeNarration = escapeHtml(narrationText).replace(/\n/g, '<br>');
+        const safeTime = timeRange
+            ? `<div style="margin-top:8px;font-size:12px;color:#6b7f95;"><strong>${escapeHtml(t('copyFieldTime'))}:</strong> ${escapeHtml(timeRange)}</div>`
+            : '';
+        return [
+            '<div style="margin:0 0 12px;padding:12px 14px;border-radius:12px;border:1px solid rgba(11,95,255,0.16);',
+            'background:linear-gradient(135deg, rgba(11,95,255,0.12), rgba(47,128,255,0.04));',
+            'box-shadow:0 10px 24px rgba(12,27,61,0.06);">',
+            `<div style="margin:0 0 6px;font-size:12px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:#30527c;">${safeTitle}</div>`,
+            `<div style="font-size:14px;line-height:1.7;font-weight:700;color:#123454;">${safeNarration}</div>`,
+            safeTime,
+            '</div>'
+        ].join('');
+    }
+
+    function buildEditableNarrationHtml(title, mapText, narrationText, timeRange) {
+        const safeTitle = escapeHtml(title);
+        const safeMap = escapeHtml(mapText);
+        const safeNarration = narrationText
+            ? escapeHtml(narrationText).replace(/\n/g, '<br>')
+            : '&nbsp;';
+        const safeTime = timeRange
+            ? `<div style="margin-top:8px;font-size:12px;color:#6b7f95;"><strong>${escapeHtml(t('copyFieldTime'))}:</strong> ${escapeHtml(timeRange)}</div>`
+            : '';
+        return [
+            '<div style="margin:0 0 12px;padding:14px 16px;border-radius:14px;border:1px solid rgba(11,95,255,0.18);',
+            'background:linear-gradient(135deg, rgba(11,95,255,0.14), rgba(47,128,255,0.05));',
+            'box-shadow:0 10px 24px rgba(12,27,61,0.06);">',
+            `<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin:0 0 8px;">`,
+            `<div style="font-size:12px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:#30527c;">${safeTitle}</div>`,
+            `<div style="font-size:12px;font-weight:700;color:#4a6786;">${safeMap}</div>`,
+            '</div>',
+            `<div style="font-size:14px;line-height:1.7;font-weight:700;color:#123454;white-space:normal;">${safeNarration}</div>`,
+            safeTime,
+            '</div>'
+        ].join('');
+    }
+
+    function buildInlineSegmentImagesHtml(images, opts = {}) {
+        const safeImages = normalizeSegmentImages(images);
+        if (!safeImages.length) return '';
+        const gap = opts.gap || '8px';
+        const margin = opts.margin || '0 0 12px';
+        const maxHeight = opts.maxHeight || '260px';
+        const borderColor = opts.borderColor || '#cfe0f2';
+        const shadow = opts.shadow || '0 8px 20px rgba(12,27,61,0.08)';
+        const wrapper = [
+            `<div style="display:flex;flex-direction:column;gap:${gap};margin:${margin};">`
+        ];
+        for (const image of safeImages) {
+            const stepLabel = image.stepNumber != null
+                ? t('clickPointScreenshot', { step: image.stepNumber })
+                : t('screenshotPreview');
+            const altText = image.description || stepLabel;
+            wrapper.push(
+                `<img src="${escapeHtml(image.screenshot)}" alt="${escapeHtml(altText)}" loading="lazy" ` +
+                `style="display:block;width:100%;max-height:${maxHeight};object-fit:cover;border-radius:10px;border:1px solid ${borderColor};box-shadow:${shadow};background:#fff;">`
+            );
+        }
+        wrapper.push('</div>');
+        return wrapper.join('');
+    }
+
+    function buildEditableClipboardPayload(sop, options = {}) {
+        const { segments, totalSteps } = getExportPresentation(sop);
+        const introTitle = t('copySectionIntro');
+        const notesTitle = t('copySectionNotes');
+        const opsTitle = t('copySectionOps');
+        const notesLines = normalizeCopyNotesLines(options.notesLines);
+        const narrationOverrides = options.narrationOverrides instanceof Map ? options.narrationOverrides : new Map();
+        const introLines = [
+            `- ${t('copyFieldStartUrl')}: ${sop.startUrl || ''}`,
+            `- ${t('copyFieldCreatedAt')}: ${sop.createdAt || ''}`,
+            `- ${t('copyFieldDuration')}: ${fmtTime(sop.duration || 0)}`,
+            `- ${t('copyFieldStepCount')}: ${totalSteps}`
+        ];
+
+        const operationBlocks = [];
+        const operationHtmlBlocks = [];
+        let lastUrl = '';
+        let narrationDisplayIndex = 0;
+
+        segments.forEach((seg, segIndex) => {
+            const blockLines = [];
+            const blockHtml = [];
+            const originalNarration = normalizeNarrationDraftText(seg?.narration || '');
+            const rawNarration = normalizeNarrationDraftText(getNarrationOverrideText(narrationOverrides, segIndex, originalNarration));
+            const hasVoice = seg?.type === 'voice' && (isMeaningfulNarration(originalNarration) || narrationOverrides.has(segIndex));
+            const stepNumbers = (seg?.steps || []).map((step) => Number(step?.stepNumber)).filter(Number.isFinite);
+            const stepRangeText = formatStepRange(stepNumbers);
+            const segImages = getSegmentImages(seg);
+
+            if (hasVoice) {
+                narrationDisplayIndex += 1;
+                const label = t('previewNarrationLabel', { index: String(narrationDisplayIndex).padStart(2, '0') });
+                const mapText = t('previewNarrationMap', { steps: stepRangeText });
+                blockLines.push(`========== ${label} | ${t('copyMappedSteps')}: ${stepRangeText} ==========`);
+                if (rawNarration) blockLines.push(rawNarration);
+                if (seg.timeRange) blockLines.push(`- ${t('copyFieldTime')}: ${seg.timeRange}`);
+                blockLines.push(`---------- ${t('copyMappedOps')} ----------`);
+
+                blockHtml.push('<section class="copy-seg copy-seg-voice">');
+                blockHtml.push(buildEditableNarrationHtml(label, mapText, rawNarration, seg.timeRange || ''));
+                if (segImages.length) {
+                    blockHtml.push(buildInlineSegmentImagesHtml(segImages, {
+                        gap: '8px',
+                        margin: '0 0 12px',
+                        maxHeight: '300px',
+                        borderColor: '#c7dbef',
+                        shadow: '0 8px 20px rgba(12,27,61,0.08)'
+                    }));
+                }
+            } else {
+                if (!(seg?.steps || []).length) return;
+                blockHtml.push('<section class="copy-seg">');
+            }
+
+            for (const step of (seg.steps || [])) {
+                const desc = normalizeNarrationText(step?.action?.description || step?.action?.type || t('actionFallback'));
+                const stepLines = [`${step.stepNumber}. ${desc}`];
+                const stepMeta = [];
+                const stepMetaHtml = [];
+
+                if (step?.timestamp) {
+                    stepMeta.push(`- ${t('copyFieldTime')}: ${step.timestamp}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('copyFieldTime'))}:</strong> ${escapeHtml(step.timestamp)}</li>`);
+                }
+
+                const stepUrl = normalizeNarrationText(step?.action?.url || '');
+                if (stepUrl && stepUrl !== lastUrl) {
+                    stepMeta.push(`- ${t('copyFieldPage')}: ${stepUrl}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('copyFieldPage'))}:</strong> ${escapeHtml(stepUrl)}</li>`);
+                    lastUrl = stepUrl;
+                }
+
+                const selector = normalizeNarrationText(step?.action?.selector || '');
+                if (selector) {
+                    stepMeta.push(`- ${t('exportAgentDetail')}: ${selector}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('exportAgentDetail'))}:</strong> <code>${escapeHtml(selector)}</code></li>`);
+                }
+
+                if (stepMeta.length) stepLines.push(stepMeta.map((line) => `   ${line}`).join('\n'));
+                blockLines.push(stepLines.join('\n'));
+                blockHtml.push(`<div class="copy-step"><p><strong>${escapeHtml(`${step.stepNumber}. ${desc}`)}</strong></p>${stepMetaHtml.length ? `<ul>${stepMetaHtml.join('')}</ul>` : ''}</div>`);
+            }
+
+            if (hasVoice || (seg.steps || []).length) {
+                operationBlocks.push(blockLines.join('\n\n').trim());
+                blockHtml.push('</section>');
+                operationHtmlBlocks.push(blockHtml.join(''));
+            }
+        });
+
+        if (!operationBlocks.length) {
+            operationBlocks.push(t('copyEmptyOps'));
+            operationHtmlBlocks.push(`<p>${escapeHtml(t('copyEmptyOps'))}</p>`);
+        }
+
+        const plainText = [
+            `# ${sop.title || 'SOP'}`,
+            `## ${introTitle}`,
+            introLines.join('\n'),
+            `## ${notesTitle}`,
+            notesLines.join('\n\n'),
+            `## ${opsTitle}`,
+            operationBlocks.join('\n\n')
+        ].join('\n\n').trim();
+
+        const html = [
+            '<article>',
+            `<h1>${escapeHtml(sop.title || 'SOP')}</h1>`,
+            `<h2>${escapeHtml(introTitle)}</h2>`,
+            `<ul>${introLines.map((line) => `<li>${escapeHtml(line.replace(/^- /, ''))}</li>`).join('')}</ul>`,
+            `<h2>${escapeHtml(notesTitle)}</h2>`,
+            notesLines.map((line) => `<p>${escapeHtml(line).replace(/\n/g, '<br>')}</p>`).join(''),
+            `<h2>${escapeHtml(opsTitle)}</h2>`,
+            operationHtmlBlocks.join(''),
+            '</article>'
+        ].join('');
+
+        return { plainText, html };
+    }
+
+    function buildClipboardPayloadV2(sop, options = {}) {
+        const { segments, totalSteps } = getExportPresentation(sop);
+        const introTitle = t('copySectionIntro');
+        const notesTitle = t('copySectionNotes');
+        const opsTitle = t('copySectionOps');
+        const notesLines = normalizeCopyNotesLines(options.notesLines);
+        const narrationOverrides = options.narrationOverrides instanceof Map ? options.narrationOverrides : new Map();
+        const introLines = [
+            `- ${t('copyFieldStartUrl')}: ${sop.startUrl || ''}`,
+            `- ${t('copyFieldCreatedAt')}: ${sop.createdAt || ''}`,
+            `- ${t('copyFieldDuration')}: ${fmtTime(sop.duration || 0)}`,
+            `- ${t('copyFieldStepCount')}: ${totalSteps}`
+        ];
+
+        const operationBlocks = [];
+        const operationHtmlBlocks = [];
+        let lastUrl = '';
+
+        segments.forEach((seg, segIndex) => {
+            const blockLines = [];
+            const blockHtml = [];
+            const rawNarration = normalizeNarrationDraftText(getNarrationOverrideText(
+                narrationOverrides,
+                segIndex,
+                normalizeNarrationDraftText(seg?.narration || '')
+            ));
+            const hasVoice = seg.type === 'voice' && isMeaningfulNarration(rawNarration);
+            const segImages = getSegmentImages(seg);
+
+            if (hasVoice) {
+                const narrationTitle = t('copyNarrationTitle');
+                blockLines.push([
+                    `### ${narrationTitle}`,
+                    '',
+                    ` ${rawNarration} `,
+                    '',
+                    seg.timeRange ? `- ${t('copyFieldTime')}: ${seg.timeRange}` : ''
+                ].filter(Boolean).join('\n'));
+
+                blockHtml.push('<section class="copy-seg copy-seg-voice">');
+                blockHtml.push(buildCopyNarrationHtml(narrationTitle, rawNarration, seg.timeRange || ''));
+                if (segImages.length) {
+                    blockHtml.push(buildInlineSegmentImagesHtml(segImages, {
+                        gap: '8px',
+                        margin: '0 0 12px',
+                        maxHeight: '300px',
+                        borderColor: '#c7dbef',
+                        shadow: '0 8px 20px rgba(12,27,61,0.08)'
+                    }));
+                }
+            } else {
+                blockHtml.push('<section class="copy-seg">');
+            }
+
+            for (const step of (seg.steps || [])) {
+                const desc = normalizeNarrationText(step?.action?.description || step?.action?.type || t('actionFallback'));
+                const stepLines = [`${step.stepNumber}. ${desc}`];
+                const stepMeta = [];
+                const stepMetaHtml = [];
+
+                if (step?.timestamp) {
+                    stepMeta.push(`- ${t('copyFieldTime')}: ${step.timestamp}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('copyFieldTime'))}:</strong> ${escapeHtml(step.timestamp)}</li>`);
+                }
+
+                const stepUrl = normalizeNarrationText(step?.action?.url || '');
+                if (stepUrl && stepUrl !== lastUrl) {
+                    stepMeta.push(`- ${t('copyFieldPage')}: ${stepUrl}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('copyFieldPage'))}:</strong> ${escapeHtml(stepUrl)}</li>`);
+                    lastUrl = stepUrl;
+                }
+
+                const selector = normalizeNarrationText(step?.action?.selector || '');
+                if (selector) {
+                    stepMeta.push(`- ${t('exportAgentDetail')}: ${selector}`);
+                    stepMetaHtml.push(`<li><strong>${escapeHtml(t('exportAgentDetail'))}:</strong> <code>${escapeHtml(selector)}</code></li>`);
+                }
+
+                if (stepMeta.length) stepLines.push(stepMeta.map(line => `   ${line}`).join('\n'));
+                blockLines.push(stepLines.join('\n'));
+                blockHtml.push(`<div class="copy-step"><p><strong>${escapeHtml(`${step.stepNumber}. ${desc}`)}</strong></p>${stepMetaHtml.length ? `<ul>${stepMetaHtml.join('')}</ul>` : ''}</div>`);
+            }
+
+            if (hasVoice || (seg.steps || []).length) {
+                operationBlocks.push(blockLines.join('\n\n').trim());
+                blockHtml.push('</section>');
+                operationHtmlBlocks.push(blockHtml.join(''));
+            }
+        });
+
+        if (!operationBlocks.length) {
+            operationBlocks.push(t('copyEmptyOps'));
+            operationHtmlBlocks.push(`<p>${escapeHtml(t('copyEmptyOps'))}</p>`);
+        }
+
+        const plainText = [
+            `# ${sop.title || 'SOP'}`,
+            `## ${introTitle}`,
+            introLines.join('\n'),
+            `## ${notesTitle}`,
+            notesLines.join('\n\n'),
+            `## ${opsTitle}`,
+            operationBlocks.join('\n\n')
+        ].join('\n\n').trim();
+
+        const html = [
+            '<article>',
+            `<h1>${escapeHtml(sop.title || 'SOP')}</h1>`,
+            `<h2>${escapeHtml(introTitle)}</h2>`,
+            `<ul>${introLines.map(line => `<li>${escapeHtml(line.replace(/^- /, ''))}</li>`).join('')}</ul>`,
+            `<h2>${escapeHtml(notesTitle)}</h2>`,
+            notesLines.map(line => `<p>${escapeHtml(line).replace(/\n/g, '<br>')}</p>`).join(''),
+            `<h2>${escapeHtml(opsTitle)}</h2>`,
+            operationHtmlBlocks.join(''),
+            '</article>'
+        ].join('');
+
+        return { plainText, html };
+    }
+
+    function buildSopRefinementSource(sop, options = {}) {
+        const { segments, totalSteps } = getExportPresentation(sop);
+        const narrations = [];
+        const narrationOverrides = options.narrationOverrides instanceof Map ? options.narrationOverrides : new Map();
+
+        segments.forEach((seg, segIndex) => {
+            const narration = normalizeNarrationDraftText(getNarrationOverrideText(
+                narrationOverrides,
+                segIndex,
+                normalizeNarrationDraftText(seg?.narration || '')
+            ));
+            if (seg?.type !== 'voice' || !isMeaningfulNarration(narration)) return;
+
+            narrations.push({
+                segment_index: segIndex,
+                time_range: seg.timeRange || '',
+                text: narration,
+                related_steps: (seg.steps || []).map((step) => ({
+                    step_number: step.stepNumber,
+                    description: normalizeNarrationText(step?.action?.description || step?.action?.type || t('actionFallback'))
+                }))
+            });
+        });
+
+        return {
+            title: sop.title || 'SOP',
+            start_url: sop.startUrl || '',
+            created_at: sop.createdAt || '',
+            duration: fmtTime(sop.duration || 0),
+            total_steps: totalSteps,
+            notes_lines: getDefaultCopyNotesLines(),
+            narrations
+        };
+    }
+
+    function getSopRefinementPrompt() {
+        return [
+            'You refine SOP copy for AI agents.',
+            'Keep the same language as the input.',
+            'Lightly polish only notes_lines and narration texts.',
+            'Do not invent facts, steps, URLs, selectors, timestamps, or actions.',
+            'Do not change step order, step numbers, action descriptions, URLs, timestamps, or selectors.',
+            'Return strict JSON only. Do not wrap the answer in markdown fences.',
+            'JSON schema:',
+            '{"notes_lines":["string"],"narrations":[{"segment_index":0,"text":"string"}]}'
+        ].join('\n');
+    }
+
+    function collectResponseTextChunks(node, chunks) {
+        if (!node) return;
+        if (typeof node === 'string') {
+            if (node.trim()) chunks.push(node);
+            return;
+        }
+        if (Array.isArray(node)) {
+            node.forEach((item) => collectResponseTextChunks(item, chunks));
+            return;
+        }
+        if (typeof node.output_text === 'string' && node.output_text.trim()) chunks.push(node.output_text);
+        if (typeof node.text === 'string' && node.text.trim()) chunks.push(node.text);
+        if (Array.isArray(node.content)) collectResponseTextChunks(node.content, chunks);
+        if (Array.isArray(node.output)) collectResponseTextChunks(node.output, chunks);
+    }
+
+    function extractResponseOutputText(payload) {
+        if (typeof payload?.output_text === 'string' && payload.output_text.trim()) {
+            return payload.output_text.trim();
+        }
+        const chunks = [];
+        collectResponseTextChunks(payload?.output, chunks);
+        if (!chunks.length) collectResponseTextChunks(payload?.content, chunks);
+        if (!chunks.length) collectResponseTextChunks(payload, chunks);
+        return chunks.join('\n').trim();
+    }
+
+    function parseModelJson(text) {
+        let cleaned = String(text || '').trim();
+        cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
+        const firstBrace = cleaned.indexOf('{');
+        const lastBrace = cleaned.lastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+        }
+        return JSON.parse(cleaned);
+    }
+
+    function normalizeSopRefinementResult(result, source) {
+        const notesLines = Array.isArray(result?.notes_lines)
+            ? normalizeCopyNotesLines(result.notes_lines)
+            : source.notes_lines;
+        const validIndexes = new Set((source.narrations || []).map(item => item.segment_index));
+        const narrationOverrides = new Map();
+
+        if (Array.isArray(result?.narrations)) {
+            for (const item of result.narrations) {
+                const segIndex = Number(item?.segment_index);
+                const text = normalizeNarrationText(item?.text || '');
+                if (!Number.isInteger(segIndex)) continue;
+                if (!validIndexes.has(segIndex)) continue;
+                if (!isMeaningfulNarration(text)) continue;
+                narrationOverrides.set(segIndex, text);
+            }
+        }
+
+        return { notesLines, narrationOverrides };
+    }
+
+    async function fetchWithTimeout(url, options, timeoutMs) {
+        const controller = new AbortController();
+        const timerId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            return await fetch(url, { ...options, signal: controller.signal });
+        } finally {
+            clearTimeout(timerId);
+        }
+    }
+
+    async function requestSopRefinement(sop, options = {}) {
+        const settings = await getLlmSettings();
+        if (!settings.llmEnabled) {
+            throw new Error('llm-disabled');
+        }
+        if (!settings.llmBaseUrl || !settings.llmApiKey || !settings.llmModel) {
+            throw new Error('missing-llm-config');
+        }
+
+        const source = buildSopRefinementSource(sop, options);
+        const response = await fetchWithTimeout(settings.llmBaseUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${settings.llmApiKey}`
+            },
+            body: JSON.stringify({
+                model: settings.llmModel,
+                input: [
+                    {
+                        type: 'message',
+                        role: 'developer',
+                        content: [
+                            { type: 'input_text', text: getSopRefinementPrompt() }
+                        ]
+                    },
+                    {
+                        type: 'message',
+                        role: 'user',
+                        content: [
+                            { type: 'input_text', text: JSON.stringify(source) }
+                        ]
+                    }
+                ]
+            })
+        }, LLM_REQUEST_TIMEOUT_MS);
+
+        if (!response.ok) {
+            throw new Error(`llm-http-${response.status}`);
+        }
+
+        const payload = await response.json();
+        const outputText = extractResponseOutputText(payload);
+        if (!outputText) {
+            throw new Error('empty-llm-output');
+        }
+
+        let parsed;
+        try {
+            parsed = parseModelJson(outputText);
+        } catch {
+            throw new Error('invalid-llm-response');
+        }
+
+        return normalizeSopRefinementResult(parsed, source);
+    }
+
     async function writeClipboard(payload) {
         const plainText = String(payload?.plainText || '').trim();
         const html = String(payload?.html || '').trim();
@@ -2288,16 +3657,32 @@
         if (!ok) throw new Error('clipboard-copy-failed');
     }
 
-    function buildDownloadHtml(sop) {
+    function buildDownloadHtml(sop, options = {}) {
         const { segments, totalSteps } = getExportPresentation(sop);
+        const narrationOverrides = options.narrationOverrides instanceof Map ? options.narrationOverrides : new Map();
         let stepsHtml = '';
         let lastUrl = '';
 
-        for (const seg of segments) {
-            const isVoice = seg.type === 'voice' && isMeaningfulNarration(seg.narration);
+        for (const [segIndex, seg] of segments.entries()) {
+            const narration = normalizeNarrationDraftText(getNarrationOverrideText(
+                narrationOverrides,
+                segIndex,
+                normalizeNarrationDraftText(seg?.narration || '')
+            ));
+            const isVoice = seg.type === 'voice' && isMeaningfulNarration(narration);
+            const segImages = getSegmentImages(seg);
             stepsHtml += `<div class="sop-segment ${isVoice ? 'sop-seg-voice' : 'sop-seg-silent'}">`;
             if (isVoice) {
-                stepsHtml += `<div class="seg-narration"><span class="seg-icon">🎙️</span><span class="seg-text">${escapeHtml(seg.narration)}</span>${seg.timeRange ? `<span class="seg-time">${escapeHtml(seg.timeRange)}</span>` : ''}</div>`;
+                stepsHtml += `<div class="seg-narration"><span class="seg-icon">🎙️</span><span class="seg-text">${escapeHtml(narration)}</span>${seg.timeRange ? `<span class="seg-time">${escapeHtml(seg.timeRange)}</span>` : ''}</div>`;
+                if (segImages.length) {
+                    stepsHtml += buildInlineSegmentImagesHtml(segImages, {
+                        gap: '8px',
+                        margin: '0 0 4px',
+                        maxHeight: '360px',
+                        borderColor: '#d7e4f2',
+                        shadow: '0 8px 18px rgba(12,27,61,0.07)'
+                    });
+                }
             }
             for (const s of (seg.steps || [])) {
                 const descHtml = escapeHtml(s.action?.description || s.action?.type || t('actionFallback'));
@@ -2313,7 +3698,12 @@
                     lastUrl = stepUrl;
                 }
                 const safeImage = normalizeImageSrc(s.screenshot);
-                if (safeImage) body += `<img class="step-img" src="${escapeHtml(safeImage)}" alt="${escapeHtml(t('exportStepAlt', { step: s.stepNumber }))}" loading="lazy">`;
+                const isNarrationDuplicate = safeImage && segImages.some((image) => {
+                    if (image.stepNumber != null && s.stepNumber != null && image.stepNumber === s.stepNumber) return true;
+                    if (image.timestampMs != null && s.timestampMs != null && image.timestampMs === s.timestampMs) return true;
+                    return image.screenshot === safeImage;
+                });
+                if (safeImage && !isNarrationDuplicate) body += `<img class="step-img" src="${escapeHtml(safeImage)}" alt="${escapeHtml(t('exportStepAlt', { step: s.stepNumber }))}" loading="lazy">`;
                 if (s.action?.selector) body += `<details class="step-code-details"><summary class="step-code-summary">${escapeHtml(t('exportAgentDetail'))}</summary><div class="step-sel">${escapeHtml(s.action.selector)}</div></details>`;
                 stepsHtml += `<article class="sop-step"><header class="sop-hdr"><span class="step-n">${escapeHtml(s.stepNumber)}</span><span class="step-act">${descHtml}</span><span class="step-t">${escapeHtml(s.timestamp || '')}</span></header>${body ? `<div class="sop-body">${body}</div>` : ''}</article>`;
             }
@@ -2345,6 +3735,7 @@
 
         const flushPendingVoice = () => {
             if (!pendingVoice) return;
+            pendingVoice.images = mergeSegmentImages(pendingVoice.images, deriveSegmentImagesFromSteps(pendingVoice.steps || []));
             segments.push(pendingVoice);
             pendingVoice = null;
         };
@@ -2360,8 +3751,15 @@
                     narration,
                     timeRange: '',
                     timeRangeMs: null,
-                    steps: []
+                    steps: [],
+                    images: []
                 };
+                continue;
+            }
+
+            if (item.classList.contains('tl-seg-images')) {
+                if (!pendingVoice) continue;
+                pendingVoice.images = mergeSegmentImages(pendingVoice.images, extractSegmentImagesFromNode(item));
                 continue;
             }
 
@@ -2403,6 +3801,7 @@
 
             if (pendingVoice && pendingVoice.steps.length === 0) {
                 pendingVoice.steps = segSteps;
+                pendingVoice.images = mergeSegmentImages(pendingVoice.images, deriveSegmentImagesFromSteps(segSteps));
                 const firstTs = segSteps[0]?.timestampMs;
                 const lastTs = segSteps[segSteps.length - 1]?.timestampMs;
                 if (Number.isFinite(firstTs) && Number.isFinite(lastTs)) {
@@ -2417,7 +3816,8 @@
                     narration: '',
                     timeRange: '',
                     timeRangeMs: null,
-                    steps: segSteps
+                    steps: segSteps,
+                    images: deriveSegmentImagesFromSteps(segSteps)
                 });
             }
         }
@@ -2430,7 +3830,9 @@
         if (!currentSOP) return;
         const sop = currentSOP;
         try {
-            const payload = buildClipboardPayload(sop);
+            const payload = buildEditableClipboardPayload(sop, {
+                narrationOverrides: getCurrentNarrationOverrides()
+            });
             await writeClipboard(payload);
             toast(t('exportSuccess'));
         } catch (e) {
@@ -2439,11 +3841,70 @@
         }
     }
 
+    async function doCopyFullSOP() {
+        if (!currentSOP) return;
+        const sop = currentSOP;
+        try {
+            const payload = buildClipboardPayloadV2(sop, {
+                narrationOverrides: getCurrentNarrationOverrides()
+            });
+            await writeClipboard(payload);
+            toast(t('exportFullSuccess'));
+        } catch (e) {
+            console.error('Copy full SOP failed:', e);
+            toast(t('toastCopyFailed'));
+        }
+    }
+
+    async function doRefineCopySOP() {
+        if (!currentSOP || !btnRefineCopy) return;
+        if (!llmEnabled) {
+            toast(t('toastLlmDisabled'));
+            return;
+        }
+        const sop = currentSOP;
+        btnRefineCopy.disabled = true;
+        btnRefineCopy.textContent = t('refiningCopy');
+
+        try {
+            const baseNarrationOverrides = getCurrentNarrationOverrides();
+            const refinement = await requestSopRefinement(sop, {
+                narrationOverrides: baseNarrationOverrides
+            });
+            const mergedNarrationOverrides = new Map(baseNarrationOverrides);
+            refinement.narrationOverrides?.forEach((text, segIndex) => {
+                mergedNarrationOverrides.set(segIndex, text);
+            });
+            const payload = buildClipboardPayloadV2(sop, {
+                ...refinement,
+                narrationOverrides: mergedNarrationOverrides
+            });
+            await writeClipboard(payload);
+            toast(t('refineCopySuccess'));
+        } catch (e) {
+            console.error('GPT refine copy failed:', e);
+            if (e?.message === 'llm-disabled') {
+                toast(t('toastLlmDisabled'));
+            } else if (e?.message === 'missing-llm-config') {
+                toast(t('toastNeedLlmSetup'));
+            } else if (e?.message === 'invalid-llm-response') {
+                toast(t('toastRefineParseFailed'));
+            } else {
+                toast(t('toastRefineFailed'));
+            }
+        } finally {
+            btnRefineCopy.disabled = false;
+            btnRefineCopy.textContent = t('refineCopy');
+        }
+    }
+
     function doDownloadHTML() {
         if (!currentSOP) return;
         const sop = currentSOP;
         try {
-            const html = buildDownloadHtml(sop);
+            const html = buildDownloadHtml(sop, {
+                narrationOverrides: getCurrentNarrationOverrides()
+            });
             const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
             const a = document.createElement('a');
             const href = URL.createObjectURL(blob);
@@ -2458,23 +3919,105 @@
         }
     }
 
+    async function doResetNarrationDrafts() {
+        if (!currentSOP) return;
+        try {
+            await clearNarrationDraftsForCurrentSop();
+            renderNarrationEditor(currentSOP);
+            toast(t('toastNarrationReset'));
+        } catch (e) {
+            console.error('Reset narration drafts failed:', e);
+            toast(t('toastGenerateError'));
+        }
+    }
+
     /* ── Wire up ── */
-    const btnExport = $('btn-export');
-    const linkSettings = $('link-settings');
     applyUiLocale();
+    applyLlmAvailability(false);
+    getLlmSettings()
+        .then((settings) => applyLlmAvailability(settings.llmEnabled))
+        .catch(() => applyLlmAvailability(false));
     btnStart.addEventListener('click', handleStartClick);
+    btnStartManual?.addEventListener('click', handleStartManualClick);
     btnStop.addEventListener('click', doStop);
     btnPause?.addEventListener('click', doTogglePause);
     btnExport.addEventListener('click', doCopySOP);
+    btnCopyFull?.addEventListener('click', doCopyFullSOP);
+    btnResetNarration?.addEventListener('click', doResetNarrationDrafts);
+    btnRefineCopy?.addEventListener('click', doRefineCopySOP);
     btnDownload?.addEventListener('click', doDownloadHTML);
+    btnAddNote?.addEventListener('click', submitManualNote);
+    btnClearNote?.addEventListener('click', () => {
+        if (!manualNoteInputEl) return;
+        manualNoteInputEl.value = '';
+        manualNoteInputEl.focus();
+    });
+    manualNoteInputEl?.addEventListener('keydown', (e) => {
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submitManualNote();
+        }
+    });
     btnRedo.addEventListener('click', () => {
         stopVolumeVis();
         currentSOP = null;
+        currentNarrationDraftId = '';
+        currentNarrationDraftMap = new Map();
+        activeNarrationSegmentIndex = null;
+        if (narrationDraftPersistTimer) {
+            clearTimeout(narrationDraftPersistTimer);
+            narrationDraftPersistTimer = 0;
+        }
+        recordingMode = 'voice';
+        if (manualNoteInputEl) manualNoteInputEl.value = '';
         setRecordingLayout('live');
         switchView('idle');
     });
+    previewLocatorListEl?.addEventListener('click', (e) => {
+        const group = e.target.closest('.locator-group');
+        if (!group) return;
+        const segmentIndex = Number(group.getAttribute('data-segment-index'));
+        if (!Number.isInteger(segmentIndex)) return;
+        setActiveNarrationSegment(segmentIndex, {
+            scrollEditor: true,
+            focusEditor: true
+        });
+    });
+    previewNarrationCardsEl?.addEventListener('focusin', (e) => {
+        const card = e.target.closest('.narration-card');
+        if (!card) return;
+        const segmentIndex = Number(card.getAttribute('data-segment-index'));
+        if (!Number.isInteger(segmentIndex)) return;
+        setActiveNarrationSegment(segmentIndex, {
+            scrollLocator: true
+        });
+    });
+    previewNarrationCardsEl?.addEventListener('click', (e) => {
+        const card = e.target.closest('.narration-card');
+        if (!card) return;
+        const segmentIndex = Number(card.getAttribute('data-segment-index'));
+        if (!Number.isInteger(segmentIndex)) return;
+        setActiveNarrationSegment(segmentIndex);
+    });
+    previewNarrationCardsEl?.addEventListener('input', (e) => {
+        const textarea = e.target.closest('.narration-textarea');
+        if (!textarea) return;
+        const segmentIndex = Number(textarea.getAttribute('data-segment-index'));
+        if (!Number.isInteger(segmentIndex)) return;
+        const originalNarration = normalizeNarrationDraftText(textarea.getAttribute('data-original-narration') || '');
+        const editedNarration = normalizeNarrationDraftText(textarea.value);
+        if (editedNarration === originalNarration) {
+            currentNarrationDraftMap.delete(segmentIndex);
+        } else {
+            currentNarrationDraftMap.set(segmentIndex, editedNarration);
+        }
+        autoResizeNarrationTextarea(textarea);
+        updatePreviewActionState(previewNarrationCardsEl.querySelectorAll('.narration-card').length);
+        scheduleNarrationDraftPersist();
+    });
     evList.addEventListener('click', (e) => {
-        const btn = e.target.closest('.ev-thumb-btn');
+        const btn = e.target.closest('.ev-thumb-btn, .seg-shot-btn');
         if (!btn) return;
         e.preventDefault();
         openImageViewer(btn.getAttribute('data-full-src') || '', btn.getAttribute('data-alt') || t('screenshotPreview'));
@@ -2484,7 +4027,24 @@
         if (e.target === imgViewerEl) closeImageViewer();
     });
     window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeImageViewer();
+        if (e.key === 'Escape') {
+            closeImageViewer();
+            return;
+        }
+
+        const key = String(e.key || '').toLowerCase();
+        const isCtrlShiftCaptureHotkey =
+            !e.repeat &&
+            !e.metaKey &&
+            !e.altKey &&
+            e.ctrlKey &&
+            e.shiftKey &&
+            (e.key === 'Shift' || e.key === 'Control' || key === 's');
+
+        if (!isCtrlShiftCaptureHotkey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        triggerActiveTabShiftCapture().catch(() => {});
     });
     linkSettings.addEventListener('click', async (e) => {
         e.preventDefault();
@@ -2502,6 +4062,11 @@
         chrome.runtime.openOptionsPage();
     });
 
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== 'local' || !('llmEnabled' in changes)) return;
+        applyLlmAvailability(changes.llmEnabled.newValue);
+    });
+
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === 'NEW_EVENT' && currentView === 'recording') addActionPill(msg.data);
         if (msg.type === 'EVENT_SCREENSHOT' && currentView === 'recording') {
@@ -2514,18 +4079,12 @@
             stopSTT();
             stopVolumeVis();
             if (msg.sop) {
-                currentSOP = msg.sop;
-                applySopScreenshotsToCurrentTimeline(msg.sop);
-                switchView('recording');
-                setRecordingLayout('preview');
+                showSopPreview(msg.sop);
             } else {
                 // Fallback: request SOP separately
                 chrome.runtime.sendMessage({ type: 'GET_SOP' }, (res) => {
                     if (res?.sop) {
-                        currentSOP = res.sop;
-                        applySopScreenshotsToCurrentTimeline(res.sop);
-                        switchView('recording');
-                        setRecordingLayout('preview');
+                        showSopPreview(res.sop);
                     }
                     else { switchView('idle'); }
                 });
@@ -2556,6 +4115,7 @@
                     chrome.runtime.sendMessage({ type: 'RESTORE_RECOVERY', data: res.recovery }, () => {
                         startTime = res.recovery.startTime;
                         pausedDuration = res.recovery.pausedDuration || 0;
+                        recordingMode = res.recovery.recordingMode === 'text' ? 'text' : 'voice';
                         isPaused = false;
                         switchView('recording');
                         setPauseButton(false);
@@ -2563,13 +4123,20 @@
                         timer = setInterval(() => {
                             updateTimerDisplay(Date.now() - startTime - pausedDuration);
                         }, 1000);
-                        initSTT().then(ok => {
-                            if (!ok) toast(t('toastRecoverySttFailed'));
-                        });
-                        getMicStreamForUse().then(stream => {
-                            micStream = stream;
-                            startVolumeVis(stream);
-                        }).catch(() => {});
+                        if (!isManualMode()) {
+                            initSTT().then(ok => {
+                                if (!ok) toast(t('toastRecoverySttFailed'));
+                            });
+                            getMicStreamForUse().then(stream => {
+                                micStream = stream;
+                                startVolumeVis(stream);
+                            }).catch(() => {});
+                        } else {
+                            stopSTT({ flushInterim: false });
+                            stopVolumeVis();
+                            syncNarrationModeUi();
+                            manualNoteInputEl?.focus();
+                        }
                     });
                 } else {
                     chrome.runtime.sendMessage({ type: 'CLEAR_RECOVERY' });
@@ -2583,15 +4150,23 @@
     /* ── Startup readiness ── */
     refreshStartEligibility();
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') refreshStartEligibility();
+        if (document.visibilityState === 'visible') {
+            refreshStartEligibility();
+            return;
+        }
+        persistCurrentNarrationDrafts().catch(() => { });
     });
     window.addEventListener('focus', () => refreshStartEligibility());
+    window.addEventListener('pagehide', () => {
+        persistCurrentNarrationDrafts().catch(() => { });
+    });
 
     /* ── Initial state check ── */
     chrome.runtime.sendMessage({ type: 'GET_STATE' }, (res) => {
         if (res?.recording) {
             startTime = res.startTime;
             pausedDuration = res.pausedDuration || 0;
+            recordingMode = res.recordingMode === 'text' ? 'text' : 'voice';
             isPaused = res.paused || false;
             switchView('recording');
             setPauseButton(isPaused);
@@ -2601,12 +4176,23 @@
                     updateTimerDisplay(Date.now() - startTime - pausedDuration);
                 }
             }, 1000);
-            initSTT();
-            getMicStreamForUse().then(stream => {
-                micStream = stream;
-                startVolumeVis(stream);
-            }).catch(() => {});
+            if (!isManualMode()) {
+                initSTT();
+                getMicStreamForUse().then(stream => {
+                    micStream = stream;
+                    startVolumeVis(stream);
+                }).catch(() => {});
+            } else {
+                stopSTT({ flushInterim: false });
+                stopVolumeVis();
+                syncNarrationModeUi();
+                if (!isPaused) manualNoteInputEl?.focus();
+            }
+            return;
         }
+        maybeRestoreDraftPreview().catch((e) => {
+            console.warn('Restore draft preview failed:', e);
+        });
     });
 
     /* ── Re-check start eligibility when key changes ── */

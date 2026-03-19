@@ -15,6 +15,7 @@ let state = {
     pausedDuration: 0,
     pauseStartTime: 0,
     startUrl: '',
+    recordingMode: 'voice',
     sttProvider: 'aliyun',
     language: 'auto',
 
@@ -156,8 +157,7 @@ async function capture() {
     } catch { return null; }
 }
 
-async function captureAndAnnotate(clickX, clickY, viewportW, viewportH) {
-    const dataUrl = await capture();
+async function annotateScreenshot(dataUrl, clickX, clickY, viewportW, viewportH) {
     if (!dataUrl || clickX == null || clickY == null) return dataUrl;
     try {
         await ensureOffscreen();
@@ -169,6 +169,40 @@ async function captureAndAnnotate(clickX, clickY, viewportW, viewportH) {
         console.warn('annotate failed:', e);
         return dataUrl;
     }
+}
+
+async function cropScreenshot(dataUrl, captureRect, viewportW, viewportH) {
+    if (!dataUrl || !captureRect) return dataUrl;
+    try {
+        await ensureOffscreen();
+        const res = await chrome.runtime.sendMessage({
+            type: 'CROP_SCREENSHOT',
+            dataUrl,
+            rect: captureRect,
+            viewportW,
+            viewportH
+        });
+        return res?.croppedUrl || dataUrl;
+    } catch (e) {
+        console.warn('crop failed:', e);
+        return dataUrl;
+    }
+}
+
+async function captureActionScreenshot(action) {
+    const dataUrl = await capture();
+    if (!dataUrl) return null;
+
+    if (action?.actionType === 'point' && action.captureRect) {
+        return cropScreenshot(dataUrl, action.captureRect, action.viewportW, action.viewportH);
+    }
+
+    if ((action?.actionType === 'click' || action?.actionType === 'select' || action?.actionType === 'point')
+        && action.clickX != null && action.clickY != null) {
+        return annotateScreenshot(dataUrl, action.clickX, action.clickY, action.viewportW, action.viewportH);
+    }
+
+    return dataUrl;
 }
 
 /* ── Effective timestamp (accounting for paused duration) ── */
@@ -237,6 +271,7 @@ function saveRecoveryData() {
             pendingScrolls: state.pendingScrolls,
             startTime: state.startTime,
             startUrl: state.startUrl,
+            recordingMode: state.recordingMode,
             sttProvider: state.sttProvider,
             language: state.language,
             pausedDuration: state.pausedDuration,
@@ -258,7 +293,7 @@ function isRestrictedUrl(url) {
 }
 
 /* ── Recording lifecycle ── */
-async function startRecording() {
+async function startRecording(mode = 'voice') {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const activeTab = tabs[0];
     if (!activeTab?.id) {
@@ -282,6 +317,7 @@ async function startRecording() {
         pausedDuration: 0,
         pauseStartTime: 0,
         startUrl: activeTab?.url || '',
+        recordingMode: mode === 'text' ? 'text' : 'voice',
         sttProvider,
         language,
         timeline: [],
@@ -311,7 +347,7 @@ async function startRecording() {
     startAutoStopTimer();
     startRecoveryTimer();
 
-    return { success: true, startTime: state.startTime };
+    return { success: true, startTime: state.startTime, recordingMode: state.recordingMode };
 }
 
 async function injectContentScript(tabId, startTime) {
@@ -335,6 +371,35 @@ async function injectContentScript(tabId, startTime) {
             console.warn('inject failed', e);
             return { ok: false, reason: 'inject-failed' };
         }
+    }
+}
+
+async function triggerShiftCaptureInActiveTab() {
+    if (!state.recording || state.paused) {
+        return { success: false, reason: 'not-recording' };
+    }
+
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs[0];
+    if (!activeTab?.id) {
+        return { success: false, reason: 'no-active-tab' };
+    }
+    if (isRestrictedUrl(activeTab.url)) {
+        chrome.runtime.sendMessage({ type: 'RESTRICTED_PAGE', url: activeTab.url }).catch(() => {});
+        return { success: false, reason: 'restricted-page' };
+    }
+
+    const injected = await injectContentScript(activeTab.id, state.startTime);
+    if (!injected.ok) {
+        return { success: false, reason: injected.reason || 'inject-failed' };
+    }
+
+    try {
+        await chrome.tabs.sendMessage(activeTab.id, { type: 'START_SHIFT_CAPTURE' });
+        return { success: true };
+    } catch (e) {
+        console.warn('Trigger shift capture failed:', e);
+        return { success: false, reason: 'start-shift-capture-failed' };
     }
 }
 
@@ -422,6 +487,7 @@ function actionDesc(ev) {
     const distance = Number(ev.distance_px || ev.scrollDelta || 0);
     switch (ev.actionType) {
         case 'click': return `点击 ${ev.target?.description || '元素'}`;
+        case 'point': return `截图标注：${ev.target?.description || '页面区域'}`;
         case 'input': return `在 ${ev.target?.description || '输入框'} 中输入 "${(ev.value || '').substring(0, 40)}"`;
         case 'navigate':
         case 'navigation': return `导航到 ${ev.pageTitle || ev.url}`;
@@ -523,7 +589,8 @@ function generateSOP() {
             key: ev.key || ev.value || null,
             direction: ev.direction || null,
             distance_px: Number(ev.distance_px || ev.scrollDelta || 0) || null,
-            screenshot_base64: (normalizedType === 'click' || normalizedType === 'select') ? screenshot : null
+            capture_rect: ev.captureRect || null,
+            screenshot_base64: (normalizedType === 'click' || normalizedType === 'select' || normalizedType === 'point') ? screenshot : null
         },
         screenshot,
         narration: ''
@@ -559,12 +626,22 @@ function generateSOP() {
                 groupSteps.push(makeStep(actions[i]));
                 i++;
             }
+            const segImages = groupSteps
+                .filter(step => step?.action?.type === 'point' && step?.screenshot)
+                .map(step => ({
+                    timestampMs: step.timestampMs,
+                    screenshot: step.screenshot,
+                    stepNumber: step.stepNumber,
+                    description: step.action?.description || '',
+                    target: step.action?.target || null
+                }));
             segments.push({
                 type: 'voice',
                 narration: seg.texts.join(''),
                 timeRange: `${fmtTime(seg.startTime)} - ${fmtTime(seg.endTime)}`,
                 timeRangeMs: { start: seg.startTime, end: seg.endTime },
-                steps: groupSteps
+                steps: groupSteps,
+                images: segImages
             });
         } else {
             const groupSteps = [];
@@ -577,7 +654,8 @@ function generateSOP() {
                 narration: '',
                 timeRange: '',
                 timeRangeMs: null,
-                steps: groupSteps
+                steps: groupSteps,
+                images: []
             });
         }
     }
@@ -592,7 +670,8 @@ function generateSOP() {
             narration: seg.texts.join(''),
             timeRange: `${fmtTime(seg.startTime)} - ${fmtTime(seg.endTime)}`,
             timeRangeMs: { start: seg.startTime, end: seg.endTime },
-            steps: []
+            steps: [],
+            images: []
         });
     }
 
@@ -611,7 +690,8 @@ function generateSOP() {
                 narration: seg.texts.join(''),
                 timeRange: `${fmtTime(seg.startTime)} - ${fmtTime(seg.endTime)}`,
                 timeRangeMs: { start: seg.startTime, end: seg.endTime },
-                steps: []
+                steps: [],
+                images: []
             });
         }
     }
@@ -651,6 +731,7 @@ function generateSOP() {
             start_time: state.startTime ? new Date(state.startTime).toISOString() : now.toISOString(),
             duration_seconds: Math.round(totalDuration / 1000),
             start_url: state.startUrl,
+            recording_mode: state.recordingMode || 'voice',
             stt_provider: state.sttProvider || 'aliyun',
             language: state.language,
             environment: {
@@ -735,7 +816,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     // Recording lifecycle
     if (msg.type === 'START_RECORDING') {
-        startRecording().then(r => respond(r));
+        startRecording(msg.mode).then(r => respond(r));
         return true;
     }
     if (msg.type === 'STOP_RECORDING') {
@@ -752,6 +833,10 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         respond({ success: true, paused: false });
         return false;
     }
+    if (msg.type === 'TRIGGER_SHIFT_CAPTURE') {
+        triggerShiftCaptureInActiveTab().then(res => respond(res));
+        return true;
+    }
 
     // State query
     if (msg.type === 'GET_STATE') {
@@ -760,6 +845,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             paused: state.paused,
             startTime: state.startTime,
             pausedDuration: state.pausedDuration,
+            recordingMode: state.recordingMode || 'voice',
             eventCount: state.events.length,
             blockCount: state.timeline.length + (state.currentBlock ? 1 : 0)
         });
@@ -772,7 +858,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const action = msg.data;
 
         // Promote any pending scrolls that happened near this action
-        if (action.actionType === 'click' || action.actionType === 'input') {
+        if (action.actionType === 'click' || action.actionType === 'input' || action.actionType === 'point') {
             const promoted = promotePendingScrolls(action.timestamp);
             for (const ps of promoted) {
                 addActionToCurrentBlock(ps);
@@ -788,8 +874,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         state.events.push(action);
 
         // Screenshot capture
-        if (action.actionType === 'click' || action.actionType === 'select') {
-            captureAndAnnotate(action.clickX, action.clickY, action.viewportW, action.viewportH)
+        if (action.actionType === 'click' || action.actionType === 'select' || action.actionType === 'point') {
+            captureActionScreenshot(action)
                 .then(s => {
                     if (!s) return;
                     state.screenshots[action.timestamp] = s;
@@ -910,6 +996,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
             state.pendingScrolls = recovery.pendingScrolls || [];
             state.startTime = recovery.startTime;
             state.startUrl = recovery.startUrl;
+            state.recordingMode = recovery.recordingMode === 'text' ? 'text' : 'voice';
             state.sttProvider = ['deepgram', 'aliyun'].includes(recovery.sttProvider)
                 ? recovery.sttProvider
                 : 'aliyun';

@@ -11,13 +11,20 @@
     const elAliyunKey = document.getElementById('aliyun-key');
     const elAliyunRegion = document.getElementById('aliyun-region');
     const elAliyunModel = document.getElementById('aliyun-model');
+    const elLlmEnabled = document.getElementById('llm-enabled');
+    const elLlmBaseUrl = document.getElementById('llm-base-url');
+    const elLlmApiKey = document.getElementById('llm-api-key');
+    const elLlmModel = document.getElementById('llm-model');
+    const llmConfigFields = document.getElementById('llm-config-fields');
 
     const providerDeepgram = document.getElementById('provider-deepgram');
     const providerAliyun = document.getElementById('provider-aliyun');
 
     const btnSave = document.getElementById('btn-save');
     const btnTest = document.getElementById('btn-test');
+    const btnTestLlm = document.getElementById('btn-test-llm');
     const statusEl = document.getElementById('status');
+    const statusLlmEl = document.getElementById('status-llm');
 
     const STORAGE_KEYS = [
         'sttProvider',
@@ -25,24 +32,31 @@
         'deepgramLang',
         'aliyunKey',
         'aliyunRegion',
-        'aliyunModel'
+        'aliyunModel',
+        'llmEnabled',
+        'llmBaseUrl',
+        'llmApiKey',
+        'llmModel'
     ];
 
     const DEFAULTS = {
         sttProvider: 'aliyun',
         deepgramLang: 'zh-CN',
         aliyunRegion: 'cn',
-        aliyunModel: 'qwen3-asr-flash-realtime'
+        aliyunModel: 'qwen3-asr-flash-realtime',
+        llmEnabled: false,
+        llmBaseUrl: 'https://gmn.chuangzuoli.com/v1/responses',
+        llmModel: 'gpt-5.4'
     };
 
     const I18N = {
         zh: {
             kicker: '扩展设置',
             pageTitle: 'Onvord 设置',
-            title: 'Onvord 语音设置',
-            subtitle: '录制前请先配置语音服务 Provider 和凭证。',
+            title: 'Onvord 语音与 GPT 设置',
+            subtitle: '录制前请先配置语音识别服务和 GPT 润色接口。',
 
-            cardEngine: '语音服务 Provider',
+            cardEngine: '语音服务',
             labelProvider: 'Provider',
 
             dgTitle: 'Deepgram',
@@ -60,16 +74,31 @@
             aliyunModelPlaceholder: 'qwen3-asr-flash-realtime',
             aliyunHint: '官方模型名：qwen3-asr-flash-realtime',
 
+            llmTitle: 'GPT SOP 润色',
+            labelLlmEnabled: '启用 GPT SOP 润色',
+            labelLlmBaseUrl: 'Responses API URL',
+            labelLlmApiKey: 'API Key',
+            labelLlmModel: '模型',
+            llmBaseUrlPlaceholder: 'https://gmn.chuangzuoli.com/v1/responses',
+            llmApiKeyPlaceholder: '输入你的 GPT API Key',
+            llmModelPlaceholder: 'gpt-5.4',
+            llmEnabledHint: '开启后会显示“GPT 整理后复制”，并允许按需调用 GPT 轻度润色文案。',
+            llmBaseUrlHint: '可填写根域名或完整的 Responses API 地址，程序会自动补到 /v1/responses',
+            llmHint: '点击“GPT 整理后复制”时，会在复制前轻度润色说明和讲解文案。',
+            testLlmBtn: '测试 GPT 连接',
+            testingLlm: '测试 GPT 中...',
+
             saveBtn: '保存设置',
-            testBtn: '测试连接',
-            testing: '测试中…',
+            testBtn: '测试语音连接',
+            testing: '测试中...',
             toggleTitle: '显示/隐藏',
 
             notesTitle: '使用说明',
             note1: '• 录制时只会使用当前选中的一个语音 Provider。',
             note2: '• Deepgram 需要手动选择中文或英文。',
-            note3: '• 所有凭证只存储在本地浏览器中。',
+            note3: '• 所有凭证都只保存在本地浏览器中。',
             note4: '• 凭证缺失时，“开始录制”会被禁用。',
+            note5: '• GPT 润色默认关闭；启用后也只会在点击“GPT 整理后复制”时调用。',
 
             statusSaved: '✅ 设置已保存',
             statusMissingDg: '⚠️ Deepgram API Key 未配置',
@@ -81,16 +110,23 @@
             statusServerDg: '⚠️ Deepgram 返回 {status}，请稍后重试',
             statusNetworkDg: '❌ 无法连接 Deepgram，请检查网络',
             statusOkAliyun: '✅ 阿里云连接成功，API Key 有效',
-            statusBadAliyun: '❌ 阿里云 API Key 无效，或与区域不匹配，请检查后重试',
+            statusBadAliyun: '❌ 阿里云 API Key 无效，或与所选区域不匹配，请检查后重试',
             statusBadAliyunFormat: '❌ 阿里云 API Key 包含非法字符（如中文/全角符号），请重新复制粘贴',
             statusServerAliyun: '⚠️ 阿里云返回 {status}，请稍后重试',
-            statusNetworkAliyun: '❌ 无法连接阿里云，请检查网络'
+            statusNetworkAliyun: '❌ 无法连接阿里云，请检查网络',
+            statusNeedLlm: '⚠️ 请先输入 GPT API Key',
+            statusNeedLlmUrl: '⚠️ 请先输入 Responses API URL',
+            statusOkLlm: '✅ GPT 连接成功，API 配置可用',
+            statusBadLlm: '❌ GPT API Key 无效，或接口拒绝了请求',
+            statusServerLlm: '⚠️ GPT 接口返回 {status}，请稍后重试',
+            statusNetworkLlm: '❌ 无法连接 GPT 接口，请检查 URL 和网络',
+            statusLlmDisabled: '⚠️ GPT 润色当前未启用，请先打开开关'
         },
         en: {
             kicker: 'Extension Settings',
             pageTitle: 'Onvord Settings',
-            title: 'Onvord Speech Settings',
-            subtitle: 'Configure your speech provider and credentials before recording.',
+            title: 'Onvord Speech & GPT Settings',
+            subtitle: 'Configure your speech provider and GPT refinement endpoint before recording.',
 
             cardEngine: 'Speech Provider',
             labelProvider: 'Provider',
@@ -110,9 +146,23 @@
             aliyunModelPlaceholder: 'qwen3-asr-flash-realtime',
             aliyunHint: 'Official model name: qwen3-asr-flash-realtime',
 
+            llmTitle: 'GPT SOP Refinement',
+            labelLlmEnabled: 'Enable GPT SOP Refinement',
+            labelLlmBaseUrl: 'Responses API URL',
+            labelLlmApiKey: 'API Key',
+            labelLlmModel: 'Model',
+            llmBaseUrlPlaceholder: 'https://gmn.chuangzuoli.com/v1/responses',
+            llmApiKeyPlaceholder: 'Enter your GPT API key',
+            llmModelPlaceholder: 'gpt-5.4',
+            llmEnabledHint: 'Show GPT Refine & Copy and allow optional GPT polishing when explicitly requested.',
+            llmBaseUrlHint: 'You can enter the root domain or the full Responses API endpoint. The app will normalize it to /v1/responses',
+            llmHint: 'Used by GPT Refine & Copy to lightly polish notes and narration before copying.',
+            testLlmBtn: 'Test GPT Connection',
+            testingLlm: 'Testing GPT...',
+
             saveBtn: 'Save Settings',
-            testBtn: 'Test Connection',
-            testing: 'Testing…',
+            testBtn: 'Test Speech Connection',
+            testing: 'Testing...',
             toggleTitle: 'Show/Hide',
 
             notesTitle: 'Usage Notes',
@@ -120,6 +170,7 @@
             note2: '• Deepgram requires manual Chinese/English selection.',
             note3: '• All credentials are stored locally in browser storage.',
             note4: '• Recording start is disabled when credentials are missing.',
+            note5: '• GPT refinement is off by default and only runs when enabled and explicitly triggered.',
 
             statusSaved: '✅ Settings saved',
             statusMissingDg: '⚠️ Deepgram API key is missing',
@@ -134,7 +185,14 @@
             statusBadAliyun: '❌ Invalid Aliyun API key, or it does not match the selected region. Please check and retry',
             statusBadAliyunFormat: '❌ Aliyun API key contains invalid characters (e.g. non-ASCII/full-width symbols). Re-copy the key',
             statusServerAliyun: '⚠️ Aliyun returned {status}. Please retry later',
-            statusNetworkAliyun: '❌ Unable to connect to Aliyun. Check network'
+            statusNetworkAliyun: '❌ Unable to connect to Aliyun. Check network',
+            statusNeedLlm: '⚠️ Please enter GPT API key first',
+            statusNeedLlmUrl: '⚠️ Please enter the Responses API URL first',
+            statusOkLlm: '✅ GPT connection succeeded. API configuration is valid',
+            statusBadLlm: '❌ Invalid GPT API key, or the endpoint rejected the request',
+            statusServerLlm: '⚠️ GPT endpoint returned {status}. Please retry later',
+            statusNetworkLlm: '❌ Unable to connect to the GPT endpoint. Check the URL and network',
+            statusLlmDisabled: '⚠️ GPT refinement is disabled. Turn on the switch first'
         }
     };
 
@@ -153,8 +211,7 @@
     }
 
     function normalizeProvider(provider) {
-        if (provider === 'deepgram') return 'deepgram';
-        return 'aliyun';
+        return provider === 'deepgram' ? 'deepgram' : 'aliyun';
     }
 
     function normalizeCredentialValue(value) {
@@ -167,6 +224,38 @@
     function normalizeAliyunRegion(region) {
         if (region === 'intl' || region === 'us') return region;
         return 'cn';
+    }
+
+    function normalizeLlmEnabled(value) {
+        return value === true;
+    }
+
+    function normalizeLlmUrl(url) {
+        let value = String(url || DEFAULTS.llmBaseUrl).trim().replace(/\s+/g, '');
+        if (!value) return '';
+        if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+        try {
+            const parsed = new URL(value);
+            parsed.hash = '';
+            parsed.search = '';
+            let path = String(parsed.pathname || '').replace(/\/+$/, '');
+            if (!path || path === '/') {
+                path = '/v1/responses';
+            } else if (/\/v1$/i.test(path)) {
+                path = `${path}/responses`;
+            }
+            parsed.pathname = path;
+            return parsed.toString().replace(/\/$/, '');
+        } catch {
+            value = value.replace(/\/+$/, '');
+            if (/\/v1$/i.test(value)) return `${value}/responses`;
+            if (!/\/v1\/responses$/i.test(value) && /^https?:\/\/[^/]+$/i.test(value)) return `${value}/v1/responses`;
+            return value;
+        }
+    }
+
+    function normalizeLlmModel(model) {
+        return String(model || DEFAULTS.llmModel).trim() || DEFAULTS.llmModel;
     }
 
     function applyLocale() {
@@ -191,11 +280,21 @@
         setText('opt-label-aliyun-model', t('labelAliyunModel'));
         setText('opt-hint-aliyun', t('aliyunHint'));
 
+        setText('opt-llm-title', t('llmTitle'));
+        setText('opt-label-llm-enabled', t('labelLlmEnabled'));
+        setText('opt-label-llm-base-url', t('labelLlmBaseUrl'));
+        setText('opt-label-llm-api-key', t('labelLlmApiKey'));
+        setText('opt-label-llm-model', t('labelLlmModel'));
+        setText('opt-hint-llm-enabled', t('llmEnabledHint'));
+        setText('opt-hint-llm-base-url', t('llmBaseUrlHint'));
+        setText('opt-hint-llm', t('llmHint'));
+
         setText('opt-card-notes', t('notesTitle'));
         setText('opt-note-1', t('note1'));
         setText('opt-note-2', t('note2'));
         setText('opt-note-3', t('note3'));
         setText('opt-note-4', t('note4'));
+        setText('opt-note-5', t('note5'));
 
         const dgHint = document.getElementById('opt-hint-dg-key');
         if (dgHint) dgHint.innerHTML = t('dgHintHtml');
@@ -203,9 +302,13 @@
         elDgKey.placeholder = t('dgKeyPlaceholder');
         elAliyunKey.placeholder = t('aliyunKeyPlaceholder');
         elAliyunModel.placeholder = t('aliyunModelPlaceholder');
+        elLlmBaseUrl.placeholder = t('llmBaseUrlPlaceholder');
+        elLlmApiKey.placeholder = t('llmApiKeyPlaceholder');
+        elLlmModel.placeholder = t('llmModelPlaceholder');
 
         btnSave.textContent = t('saveBtn');
         btnTest.textContent = t('testBtn');
+        if (btnTestLlm) btnTestLlm.textContent = t('testLlmBtn');
 
         document.querySelectorAll('[data-toggle-target]').forEach((btn) => {
             btn.title = t('toggleTitle');
@@ -217,7 +320,11 @@
         if (dgLangEn) dgLangEn.textContent = 'English';
 
         const providerOptAliyun = elProvider.querySelector('option[value="aliyun"]');
-        if (providerOptAliyun) providerOptAliyun.textContent = isZh ? '阿里云（Qwen 实时语音）' : 'Aliyun (Qwen Realtime ASR)';
+        if (providerOptAliyun) {
+            providerOptAliyun.textContent = isZh
+                ? '阿里云（Qwen 实时语音）'
+                : 'Aliyun (Qwen Realtime ASR)';
+        }
 
         const regionCn = elAliyunRegion.querySelector('option[value="cn"]');
         const regionUs = elAliyunRegion.querySelector('option[value="us"]');
@@ -227,21 +334,48 @@
         if (regionIntl) regionIntl.textContent = isZh ? '国际站（新加坡）' : 'International (Singapore)';
     }
 
+    function renderStatus(el, msg, ok) {
+        if (!el) return;
+        el.textContent = msg;
+        el.style.display = '';
+        el.className = `status ${ok ? 'ok' : 'err'}`;
+    }
+
+    function hideStatusEl(el) {
+        if (!el) return;
+        el.className = 'status';
+        el.style.display = '';
+    }
+
     function showStatus(msg, ok) {
-        statusEl.textContent = msg;
-        statusEl.style.display = '';
-        statusEl.className = `status ${ok ? 'ok' : 'err'}`;
+        renderStatus(statusEl, msg, ok);
     }
 
     function hideStatus() {
-        statusEl.className = 'status';
-        statusEl.style.display = '';
+        hideStatusEl(statusEl);
+    }
+
+    function showLlmStatus(msg, ok) {
+        renderStatus(statusLlmEl, msg, ok);
+    }
+
+    function hideLlmStatus() {
+        hideStatusEl(statusLlmEl);
     }
 
     function renderProvider(provider) {
         const normalizedProvider = normalizeProvider(provider);
         providerDeepgram.classList.toggle('hidden', normalizedProvider !== 'deepgram');
         providerAliyun.classList.toggle('hidden', normalizedProvider !== 'aliyun');
+    }
+
+    function renderLlmSettings(enabled) {
+        const isEnabled = normalizeLlmEnabled(enabled);
+        llmConfigFields?.classList.toggle('hidden', !isEnabled);
+        llmConfigFields?.querySelectorAll('input, button').forEach((el) => {
+            el.disabled = !isEnabled;
+        });
+        if (!isEnabled) hideLlmStatus();
     }
 
     function getProviderCredentialsStatus(provider, data) {
@@ -252,8 +386,9 @@
     }
 
     function getMissingStatusText(provider) {
-        if (normalizeProvider(provider) === 'deepgram') return t('statusMissingDg');
-        return t('statusMissingAliyun');
+        return normalizeProvider(provider) === 'deepgram'
+            ? t('statusMissingDg')
+            : t('statusMissingAliyun');
     }
 
     function collectFormData() {
@@ -263,7 +398,11 @@
             deepgramLang: (elDgLang.value || DEFAULTS.deepgramLang).trim(),
             aliyunKey: normalizeCredentialValue(elAliyunKey.value),
             aliyunRegion: normalizeAliyunRegion((elAliyunRegion.value || DEFAULTS.aliyunRegion).trim()),
-            aliyunModel: (elAliyunModel.value.trim() || DEFAULTS.aliyunModel)
+            aliyunModel: (elAliyunModel.value.trim() || DEFAULTS.aliyunModel),
+            llmEnabled: normalizeLlmEnabled(elLlmEnabled?.checked),
+            llmBaseUrl: normalizeLlmUrl(elLlmBaseUrl.value),
+            llmApiKey: normalizeCredentialValue(elLlmApiKey.value),
+            llmModel: normalizeLlmModel(elLlmModel.value)
         };
     }
 
@@ -280,8 +419,13 @@
         elAliyunKey.value = merged.aliyunKey || '';
         elAliyunRegion.value = normalizeAliyunRegion(merged.aliyunRegion);
         elAliyunModel.value = merged.aliyunModel || DEFAULTS.aliyunModel;
+        if (elLlmEnabled) elLlmEnabled.checked = normalizeLlmEnabled(merged.llmEnabled);
+        elLlmBaseUrl.value = normalizeLlmUrl(merged.llmBaseUrl);
+        elLlmApiKey.value = merged.llmApiKey || '';
+        elLlmModel.value = normalizeLlmModel(merged.llmModel);
 
         renderProvider(normalizedProvider);
+        renderLlmSettings(merged.llmEnabled);
     }
 
     function getAliyunRegionCandidates(preferredRegion) {
@@ -381,6 +525,59 @@
         showStatus(`${t('statusNetworkAliyun')}${detail}`, false);
     }
 
+    async function testLlm(baseUrl, apiKey, model) {
+        const normalizedUrl = normalizeLlmUrl(baseUrl);
+        const normalizedKey = normalizeCredentialValue(apiKey);
+        const normalizedModel = normalizeLlmModel(model);
+
+        if (normalizedUrl !== baseUrl) elLlmBaseUrl.value = normalizedUrl;
+        if (normalizedKey !== apiKey) elLlmApiKey.value = normalizedKey;
+        if (normalizedModel !== model) elLlmModel.value = normalizedModel;
+
+        if (!normalizedUrl) {
+            showLlmStatus(t('statusNeedLlmUrl'), false);
+            return;
+        }
+        if (!normalizedKey) {
+            showLlmStatus(t('statusNeedLlm'), false);
+            return;
+        }
+
+        try {
+            const res = await fetch(normalizedUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${normalizedKey}`
+                },
+                body: JSON.stringify({
+                    model: normalizedModel,
+                    input: [
+                        {
+                            type: 'message',
+                            role: 'developer',
+                            content: [{ type: 'input_text', text: 'Reply with OK.' }]
+                        },
+                        {
+                            type: 'message',
+                            role: 'user',
+                            content: [{ type: 'input_text', text: 'ping' }]
+                        }
+                    ]
+                })
+            });
+            if (res.ok) {
+                showLlmStatus(t('statusOkLlm'), true);
+            } else if (res.status === 401 || res.status === 403) {
+                showLlmStatus(t('statusBadLlm'), false);
+            } else {
+                showLlmStatus(t('statusServerLlm', { status: res.status }), false);
+            }
+        } catch {
+            showLlmStatus(t('statusNetworkLlm'), false);
+        }
+    }
+
     function bindVisibilityToggles() {
         document.querySelectorAll('[data-toggle-target]').forEach((btn) => {
             btn.addEventListener('click', () => {
@@ -432,6 +629,29 @@
                 btnTest.disabled = false;
                 btnTest.textContent = t('testBtn');
             }
+        });
+
+        btnTestLlm?.addEventListener('click', async () => {
+            const data = collectFormData();
+
+            btnTestLlm.disabled = true;
+            btnTestLlm.textContent = t('testingLlm');
+            hideLlmStatus();
+
+            try {
+                if (!data.llmEnabled) {
+                    showLlmStatus(t('statusLlmDisabled'), false);
+                    return;
+                }
+                await testLlm(data.llmBaseUrl, data.llmApiKey, data.llmModel);
+            } finally {
+                btnTestLlm.disabled = false;
+                btnTestLlm.textContent = t('testLlmBtn');
+            }
+        });
+
+        elLlmEnabled?.addEventListener('change', () => {
+            renderLlmSettings(elLlmEnabled.checked);
         });
     }
 

@@ -219,6 +219,42 @@
             display: none;
         }
 
+        .toggle-field {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid #d5e2ef;
+            border-radius: 12px;
+            background: #f8fbff;
+        }
+
+        .toggle-field input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            margin-top: 2px;
+            accent-color: var(--ac);
+            flex-shrink: 0;
+        }
+
+        .toggle-copy {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .toggle-copy label {
+            margin: 0 0 4px;
+            color: #173453;
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+
+        .toggle-copy .hint {
+            margin-top: 0;
+        }
+
         @media (max-width: 640px) {
             .field-row {
                 grid-template-columns: 1fr;
@@ -390,6 +426,44 @@
                 <div class="hint" id="opt-hint-aliyun">Official model: <code>qwen3-asr-flash-realtime</code></div>
             </section>
 
+            <section id="provider-llm" class="provider-section">
+                <div class="provider-title" id="opt-llm-title">GPT SOP Refinement</div>
+                    <div class="field">
+                        <div class="toggle-field">
+                            <input type="checkbox" id="llm-enabled">
+                            <div class="toggle-copy">
+                                <label for="llm-enabled" id="opt-label-llm-enabled">Enable GPT SOP Refinement</label>
+                                <div class="hint" id="opt-hint-llm-enabled">Show the GPT Refine &amp; Copy action and enable GPT polishing on demand.</div>
+                            </div>
+                        </div>
+                    </div>
+                <div id="llm-config-fields" class="advanced-wrap hidden">
+                    <div class="field">
+                        <label for="llm-base-url" id="opt-label-llm-base-url">Responses API URL</label>
+                        <input type="text" id="llm-base-url" placeholder="https://gmn.chuangzuoli.com/v1/responses">
+                        <div class="hint" id="opt-hint-llm-base-url">You can enter the root domain or the full Responses API endpoint. It will be normalized to /v1/responses.</div>
+                    </div>
+                    <div class="field-row">
+                        <div class="field">
+                            <label for="llm-model" id="opt-label-llm-model">Model</label>
+                            <input type="text" id="llm-model" placeholder="gpt-5.4">
+                        </div>
+                        <div class="field">
+                            <label for="llm-api-key" id="opt-label-llm-api-key">API Key</label>
+                            <div class="input-wrap">
+                                <input type="password" id="llm-api-key" placeholder="Enter your GPT API key">
+                                <button class="toggle-vis" data-toggle-target="llm-api-key" type="button" title="Show/Hide">👁️</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="hint" id="opt-hint-llm">Used by the GPT Refine &amp; Copy action to lightly polish notes and narration before copying.</div>
+                    <div class="inline-action">
+                        <button class="btn btn-sec" id="btn-test-llm">Test GPT Connection</button>
+                    </div>
+                    <div class="status" id="status-llm"></div>
+                </div>
+            </section>
+
             <div class="btn-row">
                 <button class="btn btn-primary" id="btn-save">Save Settings</button>
                 <button class="btn btn-sec" id="btn-test">Test Connection</button>
@@ -404,6 +478,7 @@
                 <p id="opt-note-2">• Deepgram requires explicit language (Chinese or English).</p>
                 <p id="opt-note-3">• All credentials are stored locally in browser storage.</p>
                 <p id="opt-note-4">• If credentials are missing, recording will not start.</p>
+                <p id="opt-note-5">• GPT refinement is optional and only runs when enabled and explicitly triggered.</p>
             </div>
         </div>
     </div>

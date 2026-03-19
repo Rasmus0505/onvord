@@ -12,6 +12,19 @@
   let isPaused = false;
   let recordingStartTime = 0;
   let listenersAttached = false;
+  let lastPointer = { clientX: null, clientY: null, target: null };
+  const SHIFT_CAPTURE_MIN_SIZE = 12;
+  const shiftCaptureState = {
+    active: false,
+    overlayEl: null,
+    boxEl: null,
+    hintEl: null,
+    startX: null,
+    startY: null,
+    endX: null,
+    endY: null,
+    fallbackTarget: null
+  };
   const IS_ZH = /^zh\b/i.test(navigator.language || '');
 
   /* ── Utilities ── */
@@ -133,6 +146,8 @@
   const LABEL_SELECT_TEXT = IS_ZH ? '选择文字' : 'Select text';
   const LABEL_INPUT_FALLBACK = IS_ZH ? '输入框' : 'Input';
   const LABEL_RECORDING_TITLE = IS_ZH ? 'Onvord 录制中' : 'Onvord Recording';
+  const LABEL_MARK_HERE = IS_ZH ? '标记这里' : 'Mark here';
+  const LABEL_PAGE_AREA = IS_ZH ? '页面位置' : 'Page area';
 
   // Interactive tags that should always be recorded
   const INTERACTIVE_TAGS = new Set(['a', 'button', 'input', 'textarea', 'select', 'option', 'summary', 'label']);
@@ -148,6 +163,7 @@
 
   // Keypress keys to capture (Backspace/Delete excluded — they are editing operations, not SOP steps)
   const CAPTURE_KEYS = new Set(['Enter', 'Tab', 'Escape']);
+  const LABEL_SHIFT_CAPTURE_HINT = IS_ZH ? '拖拽框选截图区域，按 Esc 取消' : 'Drag to capture an area, Esc to cancel';
 
   function getDirectText(el) {
     let text = '';
@@ -308,6 +324,351 @@
   function rect(el) {
     const r = el.getBoundingClientRect();
     return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+  }
+
+  function clampToViewport(value, max) {
+    const upper = Math.max(0, Math.round(max) - 1);
+    return Math.min(Math.max(0, Math.round(value)), upper);
+  }
+
+  function rememberPointer(e) {
+    if (shiftCaptureState.active) return;
+    if (!e) return;
+    const clientX = Number(e.clientX);
+    const clientY = Number(e.clientY);
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+    lastPointer = {
+      clientX,
+      clientY,
+      target: e.target instanceof Element ? e.target : null
+    };
+  }
+
+  function getHoveredElementFallback() {
+    try {
+      const hovered = document.querySelectorAll(':hover');
+      return hovered.length ? hovered[hovered.length - 1] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function resolvePointCaptureContext() {
+    let clientX = Number(lastPointer.clientX);
+    let clientY = Number(lastPointer.clientY);
+    let target = lastPointer.target instanceof Element && lastPointer.target.isConnected ? lastPointer.target : null;
+
+    if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+      try {
+        target = document.elementFromPoint(clientX, clientY) || target;
+      } catch {}
+    }
+
+    if (!(target instanceof Element)) {
+      target = getHoveredElementFallback();
+      if (target instanceof Element) {
+        const bounds = target.getBoundingClientRect();
+        clientX = bounds.left + Math.max(bounds.width / 2, 0);
+        clientY = bounds.top + Math.max(bounds.height / 2, 0);
+      }
+    }
+
+    if (!(target instanceof Element)) return null;
+
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+      const bounds = target.getBoundingClientRect();
+      if (!bounds.width && !bounds.height) return null;
+      clientX = bounds.left + Math.max(bounds.width / 2, 0);
+      clientY = bounds.top + Math.max(bounds.height / 2, 0);
+    }
+
+    return {
+      clientX: clampToViewport(clientX, window.innerWidth),
+      clientY: clampToViewport(clientY, window.innerHeight),
+      target
+    };
+  }
+
+  function describePointTarget(el, clientX, clientY) {
+    const candidate = findMeaningfulTarget(el);
+    const inspected = [];
+    if (candidate instanceof Element) inspected.push(candidate);
+    if (el instanceof Element && el !== candidate) inspected.push(el);
+
+    for (const item of inspected) {
+      const desc = describeElement(item);
+      if (desc) {
+        return { element: item, description: desc };
+      }
+    }
+
+    const coords = `${Math.round(clientX)}, ${Math.round(clientY)}`;
+    return {
+      element: el,
+      description: `${LABEL_PAGE_AREA} (${coords})`
+    };
+  }
+
+  function recordPointMarker() {
+    const ctx = resolvePointCaptureContext();
+    if (!ctx) return;
+
+    const described = describePointTarget(ctx.target, ctx.clientX, ctx.clientY);
+    const targetEl = described?.element instanceof Element ? described.element : ctx.target;
+    const selectorInfo = getSelectorWithConfidence(targetEl);
+    const text = getDirectText(targetEl).substring(0, 40);
+
+    send({
+      actionType: 'point',
+      key: 'Ctrl+Shift',
+      target: {
+        tag: targetEl.tagName.toLowerCase(),
+        text,
+        selector: selectorInfo.selector,
+        xpath: selectorInfo.xpath,
+        selector_confidence: selectorInfo.selector_confidence,
+        description: described?.description || LABEL_MARK_HERE,
+        rect: rect(targetEl)
+      },
+      clickX: ctx.clientX,
+      clickY: ctx.clientY,
+      viewportW: window.innerWidth,
+      viewportH: window.innerHeight
+    });
+  }
+
+  function resetShiftCaptureState() {
+    shiftCaptureState.active = false;
+    shiftCaptureState.overlayEl = null;
+    shiftCaptureState.boxEl = null;
+    shiftCaptureState.hintEl = null;
+    shiftCaptureState.startX = null;
+    shiftCaptureState.startY = null;
+    shiftCaptureState.endX = null;
+    shiftCaptureState.endY = null;
+    shiftCaptureState.fallbackTarget = null;
+  }
+
+  function getShiftCaptureRect() {
+    if (shiftCaptureState.startX == null || shiftCaptureState.startY == null || shiftCaptureState.endX == null || shiftCaptureState.endY == null) {
+      return null;
+    }
+    const x1 = clampToViewport(Math.min(shiftCaptureState.startX, shiftCaptureState.endX), window.innerWidth);
+    const y1 = clampToViewport(Math.min(shiftCaptureState.startY, shiftCaptureState.endY), window.innerHeight);
+    const x2 = clampToViewport(Math.max(shiftCaptureState.startX, shiftCaptureState.endX), window.innerWidth);
+    const y2 = clampToViewport(Math.max(shiftCaptureState.startY, shiftCaptureState.endY), window.innerHeight);
+    const width = Math.max(0, x2 - x1);
+    const height = Math.max(0, y2 - y1);
+    return { x: x1, y: y1, width, height };
+  }
+
+  function updateShiftCaptureOverlay() {
+    const boxEl = shiftCaptureState.boxEl;
+    if (!boxEl) return;
+    const rectInfo = getShiftCaptureRect();
+    if (!rectInfo || rectInfo.width <= 0 || rectInfo.height <= 0) {
+      boxEl.style.display = 'none';
+      return;
+    }
+    boxEl.style.display = 'block';
+    boxEl.style.left = `${rectInfo.x}px`;
+    boxEl.style.top = `${rectInfo.y}px`;
+    boxEl.style.width = `${rectInfo.width}px`;
+    boxEl.style.height = `${rectInfo.height}px`;
+    if (shiftCaptureState.hintEl) {
+      shiftCaptureState.hintEl.textContent = `${LABEL_SHIFT_CAPTURE_HINT} (${rectInfo.width}x${rectInfo.height})`;
+    }
+  }
+
+  function consumeShiftCapturePointerEvent(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function resolveShiftCaptureTarget(clientX, clientY) {
+    let target = null;
+    const overlay = shiftCaptureState.overlayEl;
+    if (overlay) {
+      const prev = overlay.style.pointerEvents;
+      overlay.style.pointerEvents = 'none';
+      try {
+        target = document.elementFromPoint(clientX, clientY);
+      } catch {}
+      overlay.style.pointerEvents = prev;
+    }
+
+    if (!(target instanceof Element)) {
+      target = shiftCaptureState.fallbackTarget instanceof Element ? shiftCaptureState.fallbackTarget : null;
+    }
+    if (!(target instanceof Element)) {
+      target = lastPointer.target instanceof Element ? lastPointer.target : null;
+    }
+    if (!(target instanceof Element)) {
+      target = getHoveredElementFallback();
+    }
+    if (!(target instanceof Element)) {
+      target = document.body;
+    }
+    return target;
+  }
+
+  function finishShiftCapture() {
+    const captureRect = getShiftCaptureRect();
+    if (!captureRect) return;
+    if (captureRect.width < SHIFT_CAPTURE_MIN_SIZE || captureRect.height < SHIFT_CAPTURE_MIN_SIZE) return;
+
+    const clickX = clampToViewport(captureRect.x + captureRect.width / 2, window.innerWidth);
+    const clickY = clampToViewport(captureRect.y + captureRect.height / 2, window.innerHeight);
+    const rawTarget = resolveShiftCaptureTarget(clickX, clickY);
+    const described = describePointTarget(rawTarget, clickX, clickY);
+    const targetEl = described?.element instanceof Element ? described.element : rawTarget;
+    const selectorInfo = getSelectorWithConfidence(targetEl);
+    const text = getDirectText(targetEl).substring(0, 40);
+
+    send({
+      actionType: 'point',
+      key: 'Ctrl+Shift',
+      target: {
+        tag: targetEl.tagName.toLowerCase(),
+        text,
+        selector: selectorInfo.selector,
+        xpath: selectorInfo.xpath,
+        selector_confidence: selectorInfo.selector_confidence,
+        description: described?.description || LABEL_MARK_HERE,
+        rect: rect(targetEl)
+      },
+      captureRect,
+      clickX,
+      clickY,
+      viewportW: window.innerWidth,
+      viewportH: window.innerHeight
+    });
+  }
+
+  function stopShiftCaptureMode() {
+    if (!shiftCaptureState.active) return;
+    document.removeEventListener('mousedown', onShiftCaptureMouseDown, true);
+    document.removeEventListener('mousemove', onShiftCaptureMouseMove, true);
+    document.removeEventListener('mouseup', onShiftCaptureMouseUp, true);
+    document.removeEventListener('keydown', onShiftCaptureKeyDown, true);
+    if (shiftCaptureState.overlayEl) shiftCaptureState.overlayEl.remove();
+    resetShiftCaptureState();
+  }
+
+  function onShiftCaptureMouseDown(e) {
+    if (!shiftCaptureState.active) return;
+    if (e.button !== 0) {
+      consumeShiftCapturePointerEvent(e);
+      return;
+    }
+    shiftCaptureState.startX = clampToViewport(e.clientX, window.innerWidth);
+    shiftCaptureState.startY = clampToViewport(e.clientY, window.innerHeight);
+    shiftCaptureState.endX = shiftCaptureState.startX;
+    shiftCaptureState.endY = shiftCaptureState.startY;
+    updateShiftCaptureOverlay();
+    consumeShiftCapturePointerEvent(e);
+  }
+
+  function onShiftCaptureMouseMove(e) {
+    if (!shiftCaptureState.active) return;
+    if (shiftCaptureState.startX == null || shiftCaptureState.startY == null) {
+      consumeShiftCapturePointerEvent(e);
+      return;
+    }
+    shiftCaptureState.endX = clampToViewport(e.clientX, window.innerWidth);
+    shiftCaptureState.endY = clampToViewport(e.clientY, window.innerHeight);
+    updateShiftCaptureOverlay();
+    consumeShiftCapturePointerEvent(e);
+  }
+
+  function onShiftCaptureMouseUp(e) {
+    if (!shiftCaptureState.active) return;
+    if (e.button === 0) {
+      shiftCaptureState.endX = clampToViewport(e.clientX, window.innerWidth);
+      shiftCaptureState.endY = clampToViewport(e.clientY, window.innerHeight);
+      finishShiftCapture();
+      stopShiftCaptureMode();
+    }
+    consumeShiftCapturePointerEvent(e);
+  }
+
+  function onShiftCaptureKeyDown(e) {
+    if (!shiftCaptureState.active) return;
+    if (e.key === 'Escape') {
+      stopShiftCaptureMode();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.key === 'Shift') {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
+  function startShiftCaptureMode() {
+    if (!isRecording || isPaused || shiftCaptureState.active) return;
+    const root = document.documentElement || document.body;
+    if (!root) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'onvord-shift-capture-overlay';
+    overlay.setAttribute('style', [
+      'position:fixed',
+      'left:0',
+      'top:0',
+      'width:100vw',
+      'height:100vh',
+      'z-index:2147483647',
+      'cursor:crosshair',
+      'background:rgba(8,16,32,0.25)',
+      'backdrop-filter:blur(1px)',
+      'pointer-events:auto',
+      'user-select:none'
+    ].join(';'));
+
+    const box = document.createElement('div');
+    box.setAttribute('style', [
+      'position:absolute',
+      'display:none',
+      'border:2px solid rgba(255,255,255,0.95)',
+      'background:rgba(64,145,255,0.18)',
+      'box-shadow:0 0 0 9999px rgba(6,10,20,0.25)',
+      'pointer-events:none'
+    ].join(';'));
+
+    const hint = document.createElement('div');
+    hint.textContent = LABEL_SHIFT_CAPTURE_HINT;
+    hint.setAttribute('style', [
+      'position:absolute',
+      'left:16px',
+      'top:16px',
+      'padding:8px 10px',
+      'border-radius:8px',
+      'background:rgba(16,20,30,0.82)',
+      'color:#fff',
+      'font:12px/1.35 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif',
+      'pointer-events:none'
+    ].join(';'));
+
+    overlay.appendChild(box);
+    overlay.appendChild(hint);
+    root.appendChild(overlay);
+
+    shiftCaptureState.active = true;
+    shiftCaptureState.overlayEl = overlay;
+    shiftCaptureState.boxEl = box;
+    shiftCaptureState.hintEl = hint;
+    shiftCaptureState.startX = null;
+    shiftCaptureState.startY = null;
+    shiftCaptureState.endX = null;
+    shiftCaptureState.endY = null;
+    shiftCaptureState.fallbackTarget = lastPointer.target instanceof Element ? lastPointer.target : null;
+
+    document.addEventListener('mousedown', onShiftCaptureMouseDown, true);
+    document.addEventListener('mousemove', onShiftCaptureMouseMove, true);
+    document.addEventListener('mouseup', onShiftCaptureMouseUp, true);
+    document.addEventListener('keydown', onShiftCaptureKeyDown, true);
   }
 
   let sendErrorMuted = false;
@@ -474,6 +835,7 @@
   /* ── Handlers ── */
 
   function onMouseUp(e) {
+    if (shiftCaptureState.active) return;
     if (!isRecording || isPaused) return;
 
     // Check if text was selected
@@ -596,6 +958,30 @@
   /* ── Keypress Handler ── */
   function onKeyDown(e) {
     if (!isRecording || isPaused) return;
+    if (shiftCaptureState.active) {
+      if (e.key === 'Escape') {
+        stopShiftCaptureMode();
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
+
+    const key = String(e.key || '').toLowerCase();
+    const isCtrlShiftCaptureHotkey =
+      !e.repeat &&
+      !e.metaKey &&
+      !e.altKey &&
+      e.ctrlKey &&
+      e.shiftKey &&
+      (e.key === 'Shift' || e.key === 'Control' || key === 's');
+
+    if (isCtrlShiftCaptureHotkey) {
+      if (!e.repeat) startShiftCaptureMode();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
 
     const hasModifier = e.ctrlKey || e.metaKey || e.altKey;
     // Capture special keys or modifier combos (but not standalone Shift)
@@ -637,8 +1023,10 @@
     isRecording = true;
     isPaused = false;
     recordingStartTime = startTime;
+    lastPointer = { clientX: null, clientY: null, target: null };
     if (!listenersAttached) {
       document.addEventListener('mouseup', onMouseUp, true);
+      document.addEventListener('mousemove', rememberPointer, true);
       document.addEventListener('input', onInput, true);
       document.addEventListener('change', onChange, true);
       document.addEventListener('keydown', onKeyDown, true);
@@ -653,8 +1041,10 @@
   function stop() {
     isRecording = false;
     isPaused = false;
+    stopShiftCaptureMode();
     if (listenersAttached) {
       document.removeEventListener('mouseup', onMouseUp, true);
+      document.removeEventListener('mousemove', rememberPointer, true);
       document.removeEventListener('input', onInput, true);
       document.removeEventListener('change', onChange, true);
       document.removeEventListener('keydown', onKeyDown, true);
@@ -663,9 +1053,11 @@
     }
     clearTimeout(scrollBufferTimer);
     pendingScroll = null;
+    lastPointer = { clientX: null, clientY: null, target: null };
   }
 
   function pause() {
+    stopShiftCaptureMode();
     isPaused = true;
   }
 
@@ -679,6 +1071,7 @@
     else if (msg.type === 'STOP_RECORDING') { stop(); respond({ ok: true }); }
     else if (msg.type === 'PAUSE_RECORDING') { pause(); respond({ ok: true }); }
     else if (msg.type === 'RESUME_RECORDING') { resume(); respond({ ok: true }); }
+    else if (msg.type === 'START_SHIFT_CAPTURE') { startShiftCaptureMode(); respond({ ok: true }); }
     else if (msg.type === 'PING') { respond({ ok: true, isRecording }); }
     return true;
   });

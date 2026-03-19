@@ -1,11 +1,48 @@
 // Offscreen document: annotate screenshot with click highlight + re-encoding
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function resolveCanvas() {
+    return document.getElementById('c');
+}
+
+function loadImage(dataUrl, onLoad, onError) {
+    const img = new Image();
+    img.onload = () => onLoad(img);
+    img.onerror = () => onError?.();
+    img.src = dataUrl;
+}
+
+function cropScreenshotToRect(img, rect, viewportW, viewportH, quality = 0.82) {
+    const canvas = resolveCanvas();
+    const sx = img.width / Math.max(1, viewportW || img.width);
+    const sy = img.height / Math.max(1, viewportH || img.height);
+    const srcX = clamp(Math.round(Number(rect?.x || 0) * sx), 0, img.width - 1);
+    const srcY = clamp(Math.round(Number(rect?.y || 0) * sy), 0, img.height - 1);
+    const srcW = clamp(Math.round(Number(rect?.width || 0) * sx), 1, img.width - srcX);
+    const srcH = clamp(Math.round(Number(rect?.height || 0) * sy), 1, img.height - srcY);
+
+    if (srcW <= 1 || srcH <= 1) return null;
+
+    const maxSide = 1440;
+    const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+    const outW = Math.max(1, Math.round(srcW * scale));
+    const outH = Math.max(1, Math.round(srcH * scale));
+
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
+    return canvas.toDataURL('image/jpeg', quality);
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     // Re-encode screenshot at lower quality/resolution for file size control
     if (msg.type === 'REENCODE_SCREENSHOT') {
         const { dataUrl, quality, scale } = msg;
-        const img = new Image();
-        img.onload = () => {
-            const canvas = document.getElementById('c');
+        loadImage(dataUrl, (img) => {
+            const canvas = resolveCanvas();
             const w = Math.round(img.width * (scale || 1));
             const h = Math.round(img.height * (scale || 1));
             canvas.width = w;
@@ -13,18 +50,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, w, h);
             respond({ reencoded: canvas.toDataURL('image/jpeg', quality || 0.5) });
-        };
-        img.onerror = () => respond({ reencoded: dataUrl });
-        img.src = dataUrl;
+        }, () => respond({ reencoded: dataUrl }));
+        return true;
+    }
+
+    if (msg.type === 'CROP_SCREENSHOT') {
+        const { dataUrl, rect, viewportW, viewportH, quality } = msg;
+        loadImage(dataUrl, (img) => {
+            const croppedUrl = cropScreenshotToRect(img, rect, viewportW, viewportH, quality);
+            respond({ croppedUrl: croppedUrl || dataUrl });
+        }, () => respond({ croppedUrl: dataUrl }));
         return true;
     }
 
     if (msg.type !== 'ANNOTATE_SCREENSHOT') return;
     const { dataUrl, clickX, clickY, viewportW, viewportH } = msg;
 
-    const img = new Image();
-    img.onload = () => {
-        const canvas = document.getElementById('c');
+    loadImage(dataUrl, (img) => {
+        const canvas = resolveCanvas();
         canvas.width = img.width;
         canvas.height = img.height;
         const ctx = canvas.getContext('2d');
@@ -69,8 +112,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         ctx.fill();
 
         respond({ annotatedUrl: canvas.toDataURL('image/jpeg', 0.7) });
-    };
-    img.onerror = () => respond({ annotatedUrl: dataUrl }); // fallback to original
-    img.src = dataUrl;
+    }, () => respond({ annotatedUrl: dataUrl })); // fallback to original
     return true; // async respond
 });
