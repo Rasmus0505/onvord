@@ -13,6 +13,7 @@
   let recordingStartTime = 0;
   let listenersAttached = false;
   let lastPointer = { clientX: null, clientY: null, target: null };
+  const IS_ZH = /^zh\b/i.test(navigator.language || '');
   const SHIFT_CAPTURE_MIN_SIZE = 12;
   const shiftCaptureState = {
     active: false,
@@ -25,7 +26,20 @@
     endY: null,
     fallbackTarget: null
   };
-  const IS_ZH = /^zh\b/i.test(navigator.language || '');
+  const captureFeedbackState = {
+    el: null,
+    timer: 0
+  };
+  const CAPTURE_FEEDBACK_TEXT = {
+    success: IS_ZH ? '局部截图已保存' : 'Local area saved',
+    'capture-tab-failed': IS_ZH ? '网页截图失败' : 'Page capture failed',
+    'crop-failed': IS_ZH ? '裁剪失败，请再试一次' : 'Crop failed, try again',
+    'crop-exception': IS_ZH ? '截图出错，请再试一次' : 'Capture error, try again',
+    'missing-input': IS_ZH ? '缺少选区' : 'Missing selection',
+    tooSmall: IS_ZH ? '选区太小，请重新框选' : 'Selection too small, try again',
+    cancelled: IS_ZH ? '已取消标记' : 'Marking cancelled',
+    marked: IS_ZH ? '已标记该区域' : 'Area marked'
+  };
 
   /* ── Utilities ── */
 
@@ -514,8 +528,11 @@
 
   function finishShiftCapture() {
     const captureRect = getShiftCaptureRect();
-    if (!captureRect) return;
-    if (captureRect.width < SHIFT_CAPTURE_MIN_SIZE || captureRect.height < SHIFT_CAPTURE_MIN_SIZE) return;
+    if (!captureRect) return false;
+    if (captureRect.width < SHIFT_CAPTURE_MIN_SIZE || captureRect.height < SHIFT_CAPTURE_MIN_SIZE) {
+      showCaptureFeedback(captureRect, false, 'tooSmall');
+      return false;
+    }
 
     const clickX = clampToViewport(captureRect.x + captureRect.width / 2, window.innerWidth);
     const clickY = clampToViewport(captureRect.y + captureRect.height / 2, window.innerHeight);
@@ -543,6 +560,8 @@
       viewportW: window.innerWidth,
       viewportH: window.innerHeight
     });
+    showCaptureFeedback(captureRect, true, 'marked');
+    return true;
   }
 
   function stopShiftCaptureMode() {
@@ -596,6 +615,7 @@
     if (!shiftCaptureState.active) return;
     if (e.key === 'Escape') {
       stopShiftCaptureMode();
+      showCaptureFeedback(getShiftCaptureRect() || { x: 16, y: 52 }, false, 'cancelled');
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -669,6 +689,57 @@
     document.addEventListener('mousemove', onShiftCaptureMouseMove, true);
     document.addEventListener('mouseup', onShiftCaptureMouseUp, true);
     document.addEventListener('keydown', onShiftCaptureKeyDown, true);
+  }
+
+  function ensureCaptureFeedbackEl() {
+    if (captureFeedbackState.el) return captureFeedbackState.el;
+    const el = document.createElement('div');
+    el.id = 'onvord-capture-feedback';
+    Object.assign(el.style, {
+      position: 'fixed',
+      padding: '6px 12px',
+      borderRadius: '999px',
+      background: 'rgba(16, 20, 30, 0.9)',
+      color: '#fff',
+      font: '12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      pointerEvents: 'none',
+      zIndex: '2147483648',
+      opacity: '0',
+      transition: 'opacity 0.2s ease, transform 0.2s ease',
+      boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+      maxWidth: '260px',
+      wordBreak: 'keep-all'
+    });
+    document.body.appendChild(el);
+    captureFeedbackState.el = el;
+    return el;
+  }
+
+  function formatCaptureFeedbackText(success, reason) {
+    if (reason === 'marked') return CAPTURE_FEEDBACK_TEXT.marked;
+    if (success) return CAPTURE_FEEDBACK_TEXT.success;
+    return CAPTURE_FEEDBACK_TEXT[reason] || (IS_ZH ? '区域截图失败' : 'Area capture failed');
+  }
+
+  function showCaptureFeedback(rect, success, reason) {
+    const el = ensureCaptureFeedbackEl();
+    el.textContent = formatCaptureFeedbackText(success, reason);
+    el.style.background = success ? 'rgba(6, 171, 95, 0.95)' : 'rgba(198, 57, 57, 0.95)';
+    const safeWidth = 220;
+    const x = Number(rect?.x) || 0;
+    const y = Number(rect?.y) || 0;
+    const left = Math.min(Math.max(8, x), Math.max(8, window.innerWidth - safeWidth - 8));
+    const top = Math.min(Math.max(12, y - 34), window.innerHeight - 32);
+    el.style.transform = 'translate3d(0,0,0)';
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    el.style.opacity = '1';
+    if (captureFeedbackState.timer) {
+      window.clearTimeout(captureFeedbackState.timer);
+    }
+    captureFeedbackState.timer = window.setTimeout(() => {
+      el.style.opacity = '0';
+    }, 2200);
   }
 
   let sendErrorMuted = false;
@@ -1072,6 +1143,7 @@
     else if (msg.type === 'PAUSE_RECORDING') { pause(); respond({ ok: true }); }
     else if (msg.type === 'RESUME_RECORDING') { resume(); respond({ ok: true }); }
     else if (msg.type === 'START_SHIFT_CAPTURE') { startShiftCaptureMode(); respond({ ok: true }); }
+    else if (msg.type === 'POINT_CAPTURE_RESULT') { showCaptureFeedback(msg.captureRect, msg.success, msg.reason); respond({ ok: true }); }
     else if (msg.type === 'PING') { respond({ ok: true, isRecording }); }
     return true;
   });

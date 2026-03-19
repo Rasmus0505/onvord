@@ -258,11 +258,28 @@ body {
 .rec-actions {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .rec-actions .btn {
   width: auto;
   flex: 1;
+  min-width: 0;
+}
+
+.btn-mark-area {
+  border-color: #bfd5ea;
+  background:
+    linear-gradient(140deg, rgba(11, 95, 255, 0.08), rgba(11, 95, 255, 0.02)),
+    #f5faff;
+  color: #123c63;
+}
+
+.btn-mark-area:hover {
+  border-color: #9fc0df;
+  background:
+    linear-gradient(140deg, rgba(11, 95, 255, 0.12), rgba(11, 95, 255, 0.04)),
+    #ffffff;
 }
 
 .preview-actions {

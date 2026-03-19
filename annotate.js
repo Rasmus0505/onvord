@@ -58,8 +58,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         const { dataUrl, rect, viewportW, viewportH, quality } = msg;
         loadImage(dataUrl, (img) => {
             const croppedUrl = cropScreenshotToRect(img, rect, viewportW, viewportH, quality);
-            respond({ croppedUrl: croppedUrl || dataUrl });
-        }, () => respond({ croppedUrl: dataUrl }));
+            const didCrop = Boolean(croppedUrl);
+            respond({ croppedUrl: croppedUrl || dataUrl, didCrop });
+        }, () => respond({ croppedUrl: dataUrl, didCrop: false }));
         return true;
     }
 

@@ -16,6 +16,8 @@
     let currentNarrationDraftMap = new Map();
     let activeNarrationSegmentIndex = null;
     let narrationDraftPersistTimer = 0;
+    let markAreaStatusTimer = 0;
+    const pendingPointCaptureTimestamps = new Set();
 
     /* ── DOM refs ── */
     const $ = id => document.getElementById(id);
@@ -23,6 +25,7 @@
     const btnStart = $('btn-start'), btnStop = $('btn-stop');
     const btnStartManual = $('btn-start-manual');
     const btnPause = $('btn-pause');
+    const btnMarkArea = $('btn-mark-area');
     const btnExport = $('btn-export');
     const btnRefineCopy = $('btn-refine-copy');
     const btnRedo = $('btn-redo');
@@ -52,6 +55,7 @@
     const imgViewerCloseEl = $('img-viewer-close');
     const imgViewerImgEl = $('img-viewer-img');
     const toastEl = $('toast');
+    const markAreaStatusEl = $('mark-area-status');
     const micStatusEl = $('mic-status');
     const micIconEl = micStatusEl?.querySelector('.mic-icon');
     const modeChipEl = $('mode-chip');
@@ -362,6 +366,22 @@
     Object.assign(I18N.en, {
         manualModeHint: 'Operate first, then type what you did and why. Press Enter to add it, or Shift+Enter for a new line.'
     });
+    Object.assign(I18N.zh, {
+        markArea: '标记位置',
+        toastCaptureReady: '拖拽框选要标记的区域',
+        toastCaptureQueued: '已标记该区域，正在保存局部截图',
+        toastCaptureSaved: '局部截图已保存',
+        toastCaptureFailed: '区域已标记，但局部截图保存失败',
+        toastCaptureStartFailed: '无法进入标记模式'
+    });
+    Object.assign(I18N.en, {
+        markArea: 'Mark Area',
+        toastCaptureReady: 'Drag to mark an area',
+        toastCaptureQueued: 'Area marked. Saving local snapshot...',
+        toastCaptureSaved: 'Local area saved',
+        toastCaptureFailed: 'Area marked, but the local snapshot failed',
+        toastCaptureStartFailed: 'Could not start area marking'
+    });
 
     function t(key, vars = {}) {
         const table = I18N[uiLocale] || I18N.en;
@@ -429,6 +449,7 @@
         setText('btn-start-manual', t('startManual'));
         setText('sec-title-text', t('sectionActionLog'));
         setText('timeline-placeholder', t('waitingPlaceholder'));
+        if (btnMarkArea) btnMarkArea.innerHTML = `<span class="bi">⌗</span>${escapeHtml(t('markArea'))}`;
         imgViewerCloseEl?.setAttribute('aria-label', t('screenshotPreview'));
         if (imgViewerImgEl) imgViewerImgEl.alt = t('screenshotPreview');
         enableStartButton();
@@ -853,14 +874,31 @@
     }
 
     async function triggerActiveTabShiftCapture() {
-        if (currentView !== 'recording' || recordingLayoutMode === 'preview' || isPaused) return false;
+        if (currentView !== 'recording') return { success: false, reason: 'not-recording' };
+        if (recordingLayoutMode === 'preview') return { success: false, reason: 'preview' };
+        if (isPaused) return { success: false, reason: 'paused' };
         try {
-            const res = await chrome.runtime.sendMessage({ type: 'TRIGGER_SHIFT_CAPTURE' });
-            return res?.success === true;
+            return await chrome.runtime.sendMessage({ type: 'TRIGGER_SHIFT_CAPTURE' });
         } catch (e) {
             console.warn('Trigger active tab shift capture failed:', e);
-            return false;
+            return { success: false, reason: 'start-shift-capture-failed' };
         }
+    }
+
+    async function handleMarkAreaClick() {
+        const res = await triggerActiveTabShiftCapture();
+        if (res?.success) {
+            toast(t('toastCaptureReady'));
+            return;
+        }
+        if (res?.reason === 'restricted-page') {
+            toast(t('toastRestricted'));
+            return;
+        }
+        if (res?.reason === 'not-recording' || res?.reason === 'preview' || res?.reason === 'paused') {
+            return;
+        }
+        toast(t('toastCaptureStartFailed'));
     }
 
     async function sendRuntimeMessageWithTimeout(message, timeoutMs, timeoutCode) {
@@ -2297,6 +2335,10 @@
 
     function addActionPill(ev) {
         clearPlaceholder();
+        if (ev?.actionType === 'point' && ev.timestamp != null) {
+            pendingPointCaptureTimestamps.add(String(ev.timestamp));
+            toast(t('toastCaptureQueued'));
+        }
 
         const icon = evIcon(ev.actionType);
         const fullLabel = describeAction(ev, ev.actionType);
@@ -2688,6 +2730,7 @@
         recBarEl?.classList.toggle('done', isPreview);
         recBarEl?.classList.toggle('paused', isPausedState);
         liveSectionEl?.classList.toggle('hidden', isPreview);
+        if (btnMarkArea) btnMarkArea.disabled = isPreview || isPausedState;
         if (mode === 'preview') {
             recActionsEl?.classList.add('hidden');
             previewActionsEl?.classList.remove('hidden');
@@ -2739,6 +2782,7 @@
         currentNarrationDraftId = '';
         currentNarrationDraftMap = new Map();
         activeNarrationSegmentIndex = null;
+        pendingPointCaptureTimestamps.clear();
         if (narrationDraftPersistTimer) {
             clearTimeout(narrationDraftPersistTimer);
             narrationDraftPersistTimer = 0;
@@ -2886,6 +2930,7 @@
     async function doStop() {
         btnStop.disabled = true; btnStop.textContent = t('generating');
         if (btnPause) btnPause.disabled = true;
+        if (btnMarkArea) btnMarkArea.disabled = true;
         clearInterval(timer); timer = null;
         stopSTT();
         stopVolumeVis();
@@ -3939,6 +3984,9 @@
         .catch(() => applyLlmAvailability(false));
     btnStart.addEventListener('click', handleStartClick);
     btnStartManual?.addEventListener('click', handleStartManualClick);
+    btnMarkArea?.addEventListener('click', () => {
+        handleMarkAreaClick().catch(() => {});
+    });
     btnStop.addEventListener('click', doStop);
     btnPause?.addEventListener('click', doTogglePause);
     btnExport.addEventListener('click', doCopySOP);
@@ -3965,6 +4013,7 @@
         currentNarrationDraftId = '';
         currentNarrationDraftMap = new Map();
         activeNarrationSegmentIndex = null;
+        pendingPointCaptureTimestamps.clear();
         if (narrationDraftPersistTimer) {
             clearTimeout(narrationDraftPersistTimer);
             narrationDraftPersistTimer = 0;
@@ -4044,7 +4093,7 @@
         if (!isCtrlShiftCaptureHotkey) return;
         e.preventDefault();
         e.stopPropagation();
-        triggerActiveTabShiftCapture().catch(() => {});
+        handleMarkAreaClick().catch(() => {});
     });
     linkSettings.addEventListener('click', async (e) => {
         e.preventDefault();
@@ -4071,6 +4120,16 @@
         if (msg.type === 'NEW_EVENT' && currentView === 'recording') addActionPill(msg.data);
         if (msg.type === 'EVENT_SCREENSHOT' && currentView === 'recording') {
             applyScreenshotToTimeline(msg.timestamp, msg.screenshot);
+            if (msg.actionType === 'point') {
+                pendingPointCaptureTimestamps.delete(String(msg.timestamp));
+                toast(t('toastCaptureSaved'));
+            }
+        }
+        if (msg.type === 'EVENT_SCREENSHOT_FAILED' && currentView === 'recording') {
+            if (msg.actionType === 'point') {
+                pendingPointCaptureTimestamps.delete(String(msg.timestamp));
+                toast(t('toastCaptureFailed'));
+            }
         }
         if (msg.type === 'AUTO_STOPPED' && currentView === 'recording') {
             toast(t('toastAutoStopped'));

@@ -172,7 +172,9 @@ async function annotateScreenshot(dataUrl, clickX, clickY, viewportW, viewportH)
 }
 
 async function cropScreenshot(dataUrl, captureRect, viewportW, viewportH) {
-    if (!dataUrl || !captureRect) return dataUrl;
+    if (!dataUrl || !captureRect) {
+        return { success: false, reason: 'missing-input' };
+    }
     try {
         await ensureOffscreen();
         const res = await chrome.runtime.sendMessage({
@@ -182,27 +184,45 @@ async function cropScreenshot(dataUrl, captureRect, viewportW, viewportH) {
             viewportW,
             viewportH
         });
-        return res?.croppedUrl || dataUrl;
+        const croppedUrl = res?.croppedUrl;
+        const didCrop = Boolean(res?.didCrop);
+        if (!croppedUrl || !didCrop) {
+            return { success: false, reason: 'crop-failed' };
+        }
+        return { success: true, url: croppedUrl };
     } catch (e) {
         console.warn('crop failed:', e);
-        return dataUrl;
+        return { success: false, reason: 'crop-exception' };
     }
 }
 
 async function captureActionScreenshot(action) {
     const dataUrl = await capture();
-    if (!dataUrl) return null;
+    if (!dataUrl) return { success: false, reason: 'capture-tab-failed' };
 
     if (action?.actionType === 'point' && action.captureRect) {
-        return cropScreenshot(dataUrl, action.captureRect, action.viewportW, action.viewportH);
+        const cropResult = await cropScreenshot(dataUrl, action.captureRect, action.viewportW, action.viewportH);
+        if (!cropResult.success) return cropResult;
+        return { success: true, screenshot: cropResult.url };
     }
 
     if ((action?.actionType === 'click' || action?.actionType === 'select' || action?.actionType === 'point')
         && action.clickX != null && action.clickY != null) {
-        return annotateScreenshot(dataUrl, action.clickX, action.clickY, action.viewportW, action.viewportH);
+        const annotated = await annotateScreenshot(dataUrl, action.clickX, action.clickY, action.viewportW, action.viewportH);
+        return { success: true, screenshot: annotated };
     }
 
-    return dataUrl;
+    return { success: true, screenshot: dataUrl };
+}
+
+function notifyPointCaptureResult(tabId, rect, success, reason) {
+    if (!tabId) return;
+    chrome.tabs.sendMessage(tabId, {
+        type: 'POINT_CAPTURE_RESULT',
+        captureRect: rect || null,
+        success: Boolean(success),
+        reason: reason || (success ? 'capture-success' : 'capture-failed')
+    }).catch(() => {});
 }
 
 /* ── Effective timestamp (accounting for paused duration) ── */
@@ -856,6 +876,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     if (msg.type === 'ACTION_EVENT') {
         if (!state.recording || state.paused) return;
         const action = msg.data;
+        const tabId = sender?.tab?.id;
 
         // Promote any pending scrolls that happened near this action
         if (action.actionType === 'click' || action.actionType === 'input' || action.actionType === 'point') {
@@ -875,15 +896,31 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
 
         // Screenshot capture
         if (action.actionType === 'click' || action.actionType === 'select' || action.actionType === 'point') {
+            const captureRectForMessage = action.captureRect || action.target?.rect;
             captureActionScreenshot(action)
-                .then(s => {
-                    if (!s) return;
-                    state.screenshots[action.timestamp] = s;
+                .then(result => {
+                    if (!result?.success || !result.screenshot) {
+                        chrome.runtime.sendMessage({
+                            type: 'EVENT_SCREENSHOT_FAILED',
+                            timestamp: action.timestamp,
+                            actionType: action.actionType,
+                            reason: result?.reason || 'capture-failed'
+                        }).catch(() => {});
+                        if (tabId && action.actionType === 'point') {
+                            notifyPointCaptureResult(tabId, captureRectForMessage, false, result?.reason);
+                        }
+                        return;
+                    }
+                    state.screenshots[action.timestamp] = result.screenshot;
                     chrome.runtime.sendMessage({
                         type: 'EVENT_SCREENSHOT',
                         timestamp: action.timestamp,
-                        screenshot: s
+                        screenshot: result.screenshot,
+                        actionType: action.actionType
                     }).catch(() => {});
+                    if (tabId && action.actionType === 'point') {
+                        notifyPointCaptureResult(tabId, captureRectForMessage, true, 'capture-success');
+                    }
                 });
         }
 
