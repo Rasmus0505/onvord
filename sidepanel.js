@@ -159,7 +159,7 @@
             exportFullSuccess: '✅ 已复制完整版 SOP',
             downloadSuccess: '✅ 已下载完整 SOP',
             toastCopyFailed: '复制 SOP 失败',
-            refineCopySuccess: '✅ 已复制 GPT 润色后的 SOP',
+            refineCopySuccess: '✅ 已复制 GPT 整理后的讲解',
             toastNeedLlmSetup: '请先在设置中启用 GPT 润色，并配置接口 URL、API Key 和模型',
             toastRefineFailed: 'GPT 润色失败',
             toastRefineParseFailed: 'GPT 返回内容无法解析',
@@ -285,7 +285,7 @@
             exportFullSuccess: '✅ Full SOP copied to clipboard',
             downloadSuccess: '✅ Full SOP downloaded',
             toastCopyFailed: 'Failed to copy SOP',
-            refineCopySuccess: 'GPT-refined SOP copied to clipboard',
+            refineCopySuccess: 'GPT-refined narration copied to clipboard',
             toastNeedLlmSetup: 'Configure the GPT endpoint URL, API key, and model in settings first',
             toastRefineFailed: 'GPT refinement failed',
             toastRefineParseFailed: 'GPT response could not be parsed',
@@ -531,6 +531,82 @@
 
     async function setNarrationDraftStore(store) {
         await chrome.storage.local.set({ [NARRATION_DRAFTS_STORAGE_KEY]: store }).catch(() => { });
+    }
+
+    function serializeNarrationOverrides(overrides) {
+        if (!(overrides instanceof Map)) return [];
+        return Array.from(overrides.entries())
+            .map(([segment_index, text]) => ({
+                segment_index,
+                text: normalizeNarrationDraftText(text)
+            }))
+            .filter((item) => Number.isInteger(Number(item.segment_index)));
+    }
+
+    function deserializeNarrationOverrides(items) {
+        const map = new Map();
+        if (!Array.isArray(items)) return map;
+        for (const item of items) {
+            const segIndex = Number(item?.segment_index);
+            if (!Number.isInteger(segIndex)) continue;
+            map.set(segIndex, normalizeNarrationDraftText(item?.text || ''));
+        }
+        return map;
+    }
+
+    function buildRefinementContentFingerprint(sop, overrides = new Map()) {
+        const { segments } = getExportPresentation(sop);
+        const raw = segments
+            .map((seg, segIndex) => {
+                if (seg?.type !== 'voice') return '';
+                const narration = normalizeNarrationDraftText(getNarrationOverrideText(
+                    overrides,
+                    segIndex,
+                    normalizeNarrationDraftText(seg?.narration || '')
+                ));
+                return [segIndex, seg?.timeRange || '', narration].join('~');
+            })
+            .filter(Boolean)
+            .join('|');
+        return `ref_${hashString(raw)}`;
+    }
+
+    async function getRefinementCacheStore() {
+        const data = await new Promise((resolve) => chrome.storage.local.get([REFINEMENT_CACHE_STORAGE_KEY], resolve));
+        const store = data?.[REFINEMENT_CACHE_STORAGE_KEY];
+        return store && typeof store === 'object' ? store : {};
+    }
+
+    async function setRefinementCacheStore(store) {
+        await chrome.storage.local.set({ [REFINEMENT_CACHE_STORAGE_KEY]: store }).catch(() => { });
+    }
+
+    async function readCachedRefinement(draftId, contentFingerprint) {
+        if (!draftId || !contentFingerprint) return null;
+        const store = await getRefinementCacheStore();
+        const bucket = store?.[draftId];
+        const entry = bucket?.[contentFingerprint];
+        if (!entry || typeof entry !== 'object') return null;
+        return {
+            updatedAt: Number(entry.updatedAt) || 0,
+            title: String(entry.title || ''),
+            narrationOverrides: deserializeNarrationOverrides(entry.narrationOverrides)
+        };
+    }
+
+    async function writeCachedRefinement(draftId, contentFingerprint, title, narrationOverrides) {
+        if (!draftId || !contentFingerprint) return;
+        const store = await getRefinementCacheStore();
+        const bucket = store?.[draftId] && typeof store[draftId] === 'object'
+            ? store[draftId]
+            : {};
+        bucket[contentFingerprint] = {
+            updatedAt: Date.now(),
+            title: String(title || ''),
+            narrationOverrides: serializeNarrationOverrides(narrationOverrides)
+        };
+        store[draftId] = bucket;
+        await setRefinementCacheStore(store);
     }
 
     async function persistCurrentNarrationDrafts() {
@@ -781,12 +857,22 @@
     }
 
     async function maybeRestoreDraftPreview() {
-        const store = await getNarrationDraftStore();
-        if (!Object.keys(store).length) return false;
+        const [draftStore, refinementStore] = await Promise.all([
+            getNarrationDraftStore(),
+            getRefinementCacheStore()
+        ]);
+        if (!Object.keys(draftStore).length && !Object.keys(refinementStore).length) return false;
         const sop = await requestSopFallback();
         if (!sop) return false;
         const draftId = buildSopDraftId(sop);
-        if (!store[draftId]) return false;
+        const hasDraft = Boolean(draftStore[draftId]);
+        const refinementBucket = refinementStore[draftId];
+        const hasRefinement = Boolean(
+            refinementBucket &&
+            typeof refinementBucket === 'object' &&
+            Object.keys(refinementBucket).length
+        );
+        if (!hasDraft && !hasRefinement) return false;
         showSopPreview(sop);
         return true;
     }
@@ -1026,6 +1112,7 @@
         llmModel: 'gpt-5.4'
     };
     const NARRATION_DRAFTS_STORAGE_KEY = 'sopNarrationDrafts';
+    const REFINEMENT_CACHE_STORAGE_KEY = 'sopRefinementCache';
     const LLM_REQUEST_TIMEOUT_MS = 30000;
     const STOP_RECORDING_TIMEOUT_MS = 10000;
     const GET_SOP_TIMEOUT_MS = 3000;
@@ -3521,21 +3608,21 @@
             created_at: sop.createdAt || '',
             duration: fmtTime(sop.duration || 0),
             total_steps: totalSteps,
-            notes_lines: getDefaultCopyNotesLines(),
             narrations
         };
     }
 
     function getSopRefinementPrompt() {
         return [
-            'You refine SOP copy for AI agents.',
+            'You refine narration text for AI-ready SOPs.',
             'Keep the same language as the input.',
-            'Lightly polish only notes_lines and narration texts.',
+            'Lightly polish only the narration texts.',
+            'Do not add, remove, merge, split, or reorder narration items.',
             'Do not invent facts, steps, URLs, selectors, timestamps, or actions.',
-            'Do not change step order, step numbers, action descriptions, URLs, timestamps, or selectors.',
+            'Do not rewrite notes, step order, step numbers, action descriptions, URLs, timestamps, or selectors.',
             'Return strict JSON only. Do not wrap the answer in markdown fences.',
             'JSON schema:',
-            '{"notes_lines":["string"],"narrations":[{"segment_index":0,"text":"string"}]}'
+            '{"narrations":[{"segment_index":0,"text":"string"}]}'
         ].join('\n');
     }
 
@@ -3578,9 +3665,6 @@
     }
 
     function normalizeSopRefinementResult(result, source) {
-        const notesLines = Array.isArray(result?.notes_lines)
-            ? normalizeCopyNotesLines(result.notes_lines)
-            : source.notes_lines;
         const validIndexes = new Set((source.narrations || []).map(item => item.segment_index));
         const narrationOverrides = new Map();
 
@@ -3595,7 +3679,7 @@
             }
         }
 
-        return { notesLines, narrationOverrides };
+        return { narrationOverrides };
     }
 
     async function fetchWithTimeout(url, options, timeoutMs) {
@@ -3618,6 +3702,9 @@
         }
 
         const source = buildSopRefinementSource(sop, options);
+        if (!source.narrations.length) {
+            return { narrationOverrides: new Map() };
+        }
         const response = await fetchWithTimeout(settings.llmBaseUrl, {
             method: 'POST',
             headers: {
@@ -3913,6 +4000,17 @@
 
         try {
             const baseNarrationOverrides = getCurrentNarrationOverrides();
+            const draftId = buildSopDraftId(sop);
+            const contentFingerprint = buildRefinementContentFingerprint(sop, baseNarrationOverrides);
+            const cachedRefinement = await readCachedRefinement(draftId, contentFingerprint);
+            if (cachedRefinement) {
+                const cachedPayload = buildClipboardPayloadV2(sop, {
+                    narrationOverrides: cachedRefinement.narrationOverrides
+                });
+                await writeClipboard(cachedPayload);
+                toast(t('refineCopySuccess'));
+                return;
+            }
             const refinement = await requestSopRefinement(sop, {
                 narrationOverrides: baseNarrationOverrides
             });
@@ -3920,8 +4018,8 @@
             refinement.narrationOverrides?.forEach((text, segIndex) => {
                 mergedNarrationOverrides.set(segIndex, text);
             });
+            await writeCachedRefinement(draftId, contentFingerprint, sop.title, mergedNarrationOverrides);
             const payload = buildClipboardPayloadV2(sop, {
-                ...refinement,
                 narrationOverrides: mergedNarrationOverrides
             });
             await writeClipboard(payload);
